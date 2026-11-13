@@ -38,8 +38,23 @@ import {
 } from "@auctionit/messages/auth";
 import { passwordComplexitySchema } from "../lib/auth/password-rules.js";
 import { loginThrottle } from "../lib/auth/login-throttle.js";
+import { ipKeyGenerator } from "express-rate-limit";
+import { createRateLimiter } from "../lib/rate-limit.js";
 
 const router = Router();
+
+// Coarse per-IP ceiling across every auth route (signup, OTP issuance, password
+// reset, etc). Login already has its own per-username/per-IP throttle
+// (loginThrottle) and OTP verification its own DB-backed attempt lockout; this
+// is an outer bound for the routes that have no dedicated protection yet.
+router.use(
+  createRateLimiter({
+    windowMs: 10 * 60_000,
+    limit: 100,
+    keyGenerator: (req) => ipKeyGenerator(req.ip ?? "unknown"),
+    message: AuthErrorMessages.AUTH_RATE_LIMITED,
+  }),
+);
 
 const loginSchema = z.object({
   userLoginName: z

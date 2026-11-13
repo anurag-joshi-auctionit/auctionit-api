@@ -71,22 +71,31 @@ function num(v: string | number | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Checks every clientId in one round trip instead of one query per id. */
+async function assertUserClientAccessMany(
+  userId: number,
+  clientIds: number[],
+): Promise<void> {
+  const unique = [...new Set(clientIds)];
+  if (unique.length === 0) return;
+  const res = await db.execute<{ client_id: number }>(sql`
+    SELECT uc.client_id
+    FROM user_clients uc
+    WHERE uc.user_id = ${userId}
+      AND uc.client_id = ANY(${`{${unique.join(",")}}`}::int[])
+      AND uc.is_active = true
+  `);
+  const allowed = new Set(res.rows.map((r) => r.client_id));
+  if (unique.some((id) => !allowed.has(id))) {
+    throw new ClientReportsAccessError(ClientReportsMessages.CLIENT_FORBIDDEN);
+  }
+}
+
 async function assertUserClientAccess(
   userId: number,
   clientId: number,
 ): Promise<void> {
-  const res = await db.execute<{ ok: boolean }>(sql`
-    SELECT EXISTS (
-      SELECT 1
-      FROM user_clients uc
-      WHERE uc.user_id = ${userId}
-        AND uc.client_id = ${clientId}
-        AND uc.is_active = true
-    ) AS ok
-  `);
-  if (res.rows[0]?.ok !== true) {
-    throw new ClientReportsAccessError(ClientReportsMessages.CLIENT_FORBIDDEN);
-  }
+  await assertUserClientAccessMany(userId, [clientId]);
 }
 
 async function assertClosedAuctionAccess(
@@ -135,9 +144,7 @@ class ClientReportsService {
     range: { from: string; to: string },
   ): Promise<ReportAuctionOption[]> {
     if (clientIds.length === 0) return [];
-    for (const clientId of clientIds) {
-      await assertUserClientAccess(userId, clientId);
-    }
+    await assertUserClientAccessMany(userId, clientIds);
     const clientFilter = sql`AND a.client_id IN (${sql.join(
       clientIds.map((id) => sql`${id}`),
       sql`, `,
@@ -178,9 +185,7 @@ class ClientReportsService {
     const auctionIds = opts.auctionIds?.length ? opts.auctionIds : null;
 
     if (clientIds != null) {
-      for (const clientId of clientIds) {
-        await assertUserClientAccess(userId, clientId);
-      }
+      await assertUserClientAccessMany(userId, clientIds);
     }
 
     const clientFilter =

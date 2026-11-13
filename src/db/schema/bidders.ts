@@ -53,10 +53,6 @@ export const bidders = pgTable(
     emdBlockedBalance: numeric("emd_blocked_balance", { precision: 18, scale: 2 })
       .notNull()
       .default("0"),
-    /** Deprecated: no longer written. Held money is part of `emd_blocked_balance`. */
-    emdWinningBalance: numeric("emd_winning_balance", { precision: 18, scale: 2 })
-      .notNull()
-      .default("0"),
 
     //audit
     createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),

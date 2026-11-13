@@ -4,7 +4,9 @@ import {
   pgTable,
   timestamp,
   varchar,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { bidders } from "./bidders.js";
 import { roles } from "./roles.js";
 
 export const users = pgTable("users", {
@@ -71,7 +73,9 @@ export const users = pgTable("users", {
   isOwner: boolean("is_owner").notNull().default(false),
 
   //bidder link (strict 1:1 — at most one login user per bidder company)
-  bidderId: integer("bidder_id").unique(),
+  bidderId: integer("bidder_id")
+    .unique()
+    .references((): AnyPgColumn => bidders.id),
 
   //consent
   ndncAccepted: boolean("ndnc_accepted"),

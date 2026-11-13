@@ -107,3 +107,8 @@ export async function writeLiveKey(key: string, value: string): Promise<void> {
     console.error(`live redis set failed for ${key}`, err);
   }
 }
+
+/** The shared pub connection, for callers that need raw command access (e.g. a rate-limit store). Null when Redis is disabled/unavailable. */
+export function getLiveRedisClient(): RedisConn | null {
+  return pub;
+}

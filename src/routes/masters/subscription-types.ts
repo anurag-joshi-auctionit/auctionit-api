@@ -7,10 +7,17 @@ import {
 } from "../../lib/subscription-types/schemas.js";
 import { zodValidationErrorBody } from "../../lib/validation-error.js";
 import {
+  invalidateCachePrefix,
+  MASTERS_CACHE_TTL_SECONDS,
+  withCache,
+} from "../../lib/cache.js";
+import {
   SubscriptionTypeNotFoundError,
   SubscriptionTypeValidationError,
   subscriptionTypesMasterService,
 } from "../../services/masters/subscription-types.service.js";
+
+const CACHE_PREFIX = "cache:masters:subscription-types";
 
 const router = Router();
 
@@ -37,7 +44,12 @@ function handleError(e: unknown, res: Response): boolean {
 router.get("/", async (req, res, next) => {
   try {
     const activeOnly = req.query.activeOnly === "true";
-    res.json(await subscriptionTypesMasterService.list(activeOnly));
+    const rows = await withCache(
+      `${CACHE_PREFIX}:list:activeOnly=${activeOnly}`,
+      MASTERS_CACHE_TTL_SECONDS,
+      () => subscriptionTypesMasterService.list(activeOnly),
+    );
+    res.json(rows);
   } catch (e) {
     next(e);
   }
@@ -45,7 +57,12 @@ router.get("/", async (req, res, next) => {
 
 router.get("/options", async (_req, res, next) => {
   try {
-    res.json(await subscriptionTypesMasterService.list(true));
+    const rows = await withCache(
+      `${CACHE_PREFIX}:options`,
+      MASTERS_CACHE_TTL_SECONDS,
+      () => subscriptionTypesMasterService.list(true),
+    );
+    res.json(rows);
   } catch (e) {
     next(e);
   }
@@ -63,6 +80,7 @@ router.post("/", async (req, res, next) => {
       parsed.data,
       req.user?.id,
     );
+    await invalidateCachePrefix(CACHE_PREFIX);
     res.status(201).json(row);
   } catch (e) {
     if (handleError(e, res)) return;
@@ -89,6 +107,7 @@ router.patch("/:id", async (req, res, next) => {
       parsed.data,
       req.user?.id,
     );
+    await invalidateCachePrefix(CACHE_PREFIX);
     res.json(row);
   } catch (e) {
     if (handleError(e, res)) return;

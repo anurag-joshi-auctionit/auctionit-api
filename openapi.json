@@ -5568,8 +5568,20 @@
           "pageSize"
         ]
       },
+      "AuctionAdditionalFieldsImportJobAccepted": {
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "jobId"
+        ]
+      },
       "AuctionAdditionalFieldsImportResult": {
         "type": "object",
+        "nullable": true,
         "properties": {
           "imported": {
             "type": "integer"
@@ -5637,6 +5649,49 @@
           "created",
           "updated",
           "deleted"
+        ]
+      },
+      "AuctionAdditionalFieldsImportJobStatus": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "auctionId": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ]
+          },
+          "result": {
+            "$ref": "#/components/schemas/AuctionAdditionalFieldsImportResult"
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "auctionId",
+          "status",
+          "result",
+          "lastError",
+          "createdAt",
+          "finishedAt"
         ]
       },
       "AuctionLotBidderMapSubmitResult": {
@@ -32739,7 +32794,7 @@
           "Auctions"
         ],
         "summary": "Import additional field values from Excel",
-        "description": "Sync import keyed by (Lot No., field): matching rows update, new rows are added, and saved values of active fields missing from the file are deleted. Every row must validate first; inactive fields are untouched.\n\n**Access:** login required.\n- Requires any of: `module.auctions`, `auctions.read`.",
+        "description": "Sync import keyed by (Lot No., field): matching rows update, new rows are added, and saved values of active fields missing from the file are deleted. Every row must validate first; inactive fields are untouched. The file is uploaded and queued for background processing; poll `/additional-fields/import/{jobId}` for the result.\n\n**Access:** login required.\n- Requires any of: `module.auctions`, `auctions.read`.",
         "security": [
           {
             "bearerAuth": []
@@ -32791,12 +32846,12 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Success",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AuctionAdditionalFieldsImportResult"
+                  "$ref": "#/components/schemas/AuctionAdditionalFieldsImportJobAccepted"
                 }
               }
             }
@@ -32840,6 +32895,117 @@
           },
           "404": {
             "description": "Auction (or the referenced lot) not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auctions/{id}/additional-fields/import/{jobId}": {
+      "get": {
+        "operationId": "getAuctionsByIdAdditionalFieldsImportByJobId",
+        "tags": [
+          "Auctions"
+        ],
+        "summary": "Get additional fields import job status",
+        "description": "Poll this after queuing an import. `result` is set once `status` is `done`.\n\n**Access:** login required.\n- Requires any of: `module.auctions`, `auctions.read`.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "x-documented": true,
+        "x-permissions": {
+          "anyOf": [
+            [
+              "module.auctions",
+              "auctions.read"
+            ]
+          ]
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true
+            },
+            "required": true,
+            "name": "jobId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuctionAdditionalFieldsImportJobStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in or session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Import job not found.",
             "content": {
               "application/json": {
                 "schema": {

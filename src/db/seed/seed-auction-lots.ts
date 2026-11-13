@@ -371,6 +371,10 @@ async function main() {
           r.winnerBidderId != null && validBidderIds.has(r.winnerBidderId)
             ? r.winnerBidderId
             : null;
+        const winnerUserId =
+          r.winnerUserId != null && validUserIds.has(r.winnerUserId)
+            ? r.winnerUserId
+            : null;
         const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
         const updatedBy = resolveAuditUserIdIfTimestamp(
           r.updatedAt,
@@ -407,7 +411,7 @@ async function main() {
           r.isApproved == null ? null : Boolean(r.isApproved),
           r.reviewedAt,
           reviewedBy,
-          r.winnerUserId,
+          winnerUserId,
           winnerBidderId,
           numericOrNull(r.winningAmount),
           intOrNull(r.noBidExtensionCount) ?? 0,

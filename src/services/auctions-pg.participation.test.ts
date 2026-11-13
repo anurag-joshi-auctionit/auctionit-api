@@ -3,12 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   unionClientMaterialsMock,
   unionClientBiddersMock,
-  unionBidderMaterialsMock,
+  unionBidderMaterialsManyMock,
   selectMock,
 } = vi.hoisted(() => ({
   unionClientMaterialsMock: vi.fn(),
   unionClientBiddersMock: vi.fn(),
-  unionBidderMaterialsMock: vi.fn(),
+  unionBidderMaterialsManyMock: vi.fn(),
   selectMock: vi.fn(),
 }));
 
@@ -16,8 +16,8 @@ vi.mock("../lib/array-set.js", () => ({
   unionClientMaterials: (...args: unknown[]) =>
     unionClientMaterialsMock(...args),
   unionClientBidders: (...args: unknown[]) => unionClientBiddersMock(...args),
-  unionBidderMaterials: (...args: unknown[]) =>
-    unionBidderMaterialsMock(...args),
+  unionBidderMaterialsMany: (...args: unknown[]) =>
+    unionBidderMaterialsManyMock(...args),
 }));
 
 vi.mock("../db/index.js", () => ({
@@ -73,7 +73,7 @@ describe("pgUnionClientMaterialsFromItemIds", () => {
 describe("pgRecordBidderClientParticipation", () => {
   beforeEach(() => {
     unionClientBiddersMock.mockReset().mockResolvedValue(true);
-    unionBidderMaterialsMock.mockReset().mockResolvedValue(true);
+    unionBidderMaterialsManyMock.mockReset().mockResolvedValue(1);
     selectMock.mockReset();
   });
 
@@ -85,9 +85,9 @@ describe("pgRecordBidderClientParticipation", () => {
     await pgRecordBidderClientParticipation(executor, 10, [50, 50], [1, 2], 8);
 
     expect(unionClientBiddersMock).toHaveBeenCalledWith(executor, 10, [50], 8);
-    expect(unionBidderMaterialsMock).toHaveBeenCalledWith(
+    expect(unionBidderMaterialsManyMock).toHaveBeenCalledWith(
       executor,
-      50,
+      [50],
       [3, 7],
       8,
     );
@@ -98,7 +98,7 @@ describe("pgRecordBidderClientParticipation", () => {
     const executor = { execute: vi.fn() };
     await pgRecordBidderClientParticipation(executor, 10, [50], [1], 8);
     expect(unionClientBiddersMock).toHaveBeenCalled();
-    expect(unionBidderMaterialsMock).not.toHaveBeenCalled();
+    expect(unionBidderMaterialsManyMock).not.toHaveBeenCalled();
   });
 
   it("no-ops when bidder ids empty", async () => {

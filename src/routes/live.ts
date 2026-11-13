@@ -30,9 +30,21 @@ import {
 } from "../services/live-auction.service.js";
 import { liveBidService } from "../services/live-bid.service.js";
 import { sealedBidService } from "../services/sealed-bid.service.js";
+import { createRateLimiter } from "../lib/rate-limit.js";
 
 const router = Router();
 router.use(requireAuth);
+
+// Keyed by bidderId+lotId (available once requirePortalRole("bidder") has run):
+// throttles a scripted client hammering one lot without limiting normal fast-paced
+// bidding. The DB row lock already prevents data corruption; this bounds request
+// volume (pool/lock-wait pressure) ahead of it.
+const bidAttemptLimiter = createRateLimiter({
+  windowMs: 10_000,
+  limit: 30,
+  keyGenerator: (req) => `${req.user?.bidderId ?? "anon"}:${req.params.lotId}`,
+  message: LiveAuctionMessages.BID_RATE_LIMITED,
+});
 
 // Transport policy every live client reads on start-up (and re-reads
 // periodically) to decide which push channel to open.
@@ -263,7 +275,7 @@ router.get("/lots/:lotId/details", async (req, res, next) => {
 
 const bidSchema = z.object({ amount: z.coerce.number().positive() });
 
-router.post("/auctions/:auctionId/lots/:lotId/bid", requirePortalRole("bidder"), async (req, res, next) => {
+router.post("/auctions/:auctionId/lots/:lotId/bid", requirePortalRole("bidder"), bidAttemptLimiter, async (req, res, next) => {
   const auctionId = Number(req.params.auctionId);
   const lotId = Number(req.params.lotId);
   if (
@@ -378,6 +390,7 @@ router.get(
 router.post(
   "/auctions/:auctionId/lots/:lotId/sealed-bid",
   requirePortalRole("bidder"),
+  bidAttemptLimiter,
   async (req, res, next) => {
     const auctionId = Number(req.params.auctionId);
     const lotId = Number(req.params.lotId);
@@ -464,6 +477,7 @@ const proxySchema = z.object({ maxAmount: z.coerce.number().positive() });
 router.post(
   "/auctions/:auctionId/lots/:lotId/proxy",
   requirePortalRole("bidder"),
+  bidAttemptLimiter,
   async (req, res, next) => {
     const auctionId = Number(req.params.auctionId);
     const lotId = Number(req.params.lotId);

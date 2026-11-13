@@ -110,6 +110,11 @@ export function resolveAuctionDocumentStorage(opts: {
   };
 }
 
+/** Temp storage key for an uploaded additional-fields import, read once by the import worker. */
+export function additionalFieldsImportR2Key(auctionId: number): string {
+  return `auctions/additional-fields-imports/${auctionId}_${Date.now()}.xlsx`;
+}
+
 export function contentTypeForAuctionDocument(fileName: string): string {
   const ext = extname(sanitizeAuctionR2FileName(fileName)).toLowerCase();
   if (ext === ".pdf") return "application/pdf";

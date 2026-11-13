@@ -678,6 +678,22 @@ export const AuctionAdditionalFieldsImportResult = z
   .object({ ...ImportResultShape, created: int(), updated: int(), deleted: int() })
   .openapi("AuctionAdditionalFieldsImportResult");
 
+export const AuctionAdditionalFieldsImportJobAccepted = z
+  .object({ jobId: int() })
+  .openapi("AuctionAdditionalFieldsImportJobAccepted");
+
+export const AuctionAdditionalFieldsImportJobStatus = z
+  .object({
+    id: int(),
+    auctionId: int(),
+    status: z.enum(["queued", "running", "done", "failed"]),
+    result: AuctionAdditionalFieldsImportResult.nullable(),
+    lastError: z.string().nullable(),
+    createdAt: z.string(),
+    finishedAt: z.string().nullable(),
+  })
+  .openapi("AuctionAdditionalFieldsImportJobStatus");
+
 /* ------------------------------------------------------------------ */
 /* SSE payloads (documented in descriptions; exported for reuse)       */
 /* ------------------------------------------------------------------ */

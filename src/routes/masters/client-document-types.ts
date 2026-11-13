@@ -8,10 +8,18 @@ import {
 } from "../../lib/client-document-types/schemas.js";
 import { zodValidationErrorBody } from "../../lib/validation-error.js";
 import {
+  cacheKey,
+  invalidateCachePrefix,
+  MASTERS_CACHE_TTL_SECONDS,
+  withCache,
+} from "../../lib/cache.js";
+import {
   ClientDocumentTypeNotFoundError,
   ClientDocumentTypeValidationError,
   clientDocumentTypesMasterService,
 } from "../../services/masters/client-document-types.service.js";
+
+const CACHE_PREFIX = "cache:masters:client-document-types";
 
 const router = Router();
 
@@ -43,8 +51,10 @@ router.get("/", async (req, res, next) => {
   }
 
   try {
-    const result = await clientDocumentTypesMasterService.listPaginated(
-      parsed.data,
+    const result = await withCache(
+      cacheKey(CACHE_PREFIX, parsed.data),
+      MASTERS_CACHE_TTL_SECONDS,
+      () => clientDocumentTypesMasterService.listPaginated(parsed.data),
     );
     res.json(result);
   } catch (e) {
@@ -54,7 +64,11 @@ router.get("/", async (req, res, next) => {
 
 router.get("/options", async (_req, res, next) => {
   try {
-    const rows = await clientDocumentTypesMasterService.list(true);
+    const rows = await withCache(
+      `${CACHE_PREFIX}:options`,
+      MASTERS_CACHE_TTL_SECONDS,
+      () => clientDocumentTypesMasterService.list(true),
+    );
     res.json(rows);
   } catch (e) {
     next(e);
@@ -73,6 +87,7 @@ router.post("/", async (req, res, next) => {
       parsed.data,
       req.user?.id,
     );
+    await invalidateCachePrefix(CACHE_PREFIX);
     res.status(201).json(row);
   } catch (e) {
     if (handleError(e, res)) return;
@@ -99,6 +114,7 @@ router.patch("/:id", async (req, res, next) => {
       parsed.data,
       req.user?.id,
     );
+    await invalidateCachePrefix(CACHE_PREFIX);
     res.json(row);
   } catch (e) {
     if (handleError(e, res)) return;

@@ -50,7 +50,7 @@ import {
 } from "../lib/auction-lot-display-order.js";
 import type { AuctionLotWriteBody } from "../lib/auction-lot-write-schema.js";
 import {
-  unionBidderMaterials,
+  unionBidderMaterialsMany,
   unionClientBidders,
   unionClientMaterials,
   type SqlExecutor,
@@ -3749,9 +3749,7 @@ export async function pgRecordBidderClientParticipation(
   const materialIds = await pgMaterialIdsForLotIds(lotIds);
   if (materialIds.length === 0) return;
 
-  for (const bidderId of uniqueBidders) {
-    await unionBidderMaterials(executor, bidderId, materialIds, userId);
-  }
+  await unionBidderMaterialsMany(executor, uniqueBidders, materialIds, userId);
 }
 
 async function assertLotWriteMasters(

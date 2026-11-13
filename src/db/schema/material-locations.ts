@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
     boolean,
     check,
+    index,
     integer,
     pgTable,
     timestamp,
@@ -31,6 +32,8 @@ export const materialLocations = pgTable(
         updatedBy: integer("updated_by").references(() => users.id),
     },
     (table) => [
+        index("material_locations_client_id_idx").on(table.clientId),
+        index("material_locations_location_id_idx").on(table.locationId),
         check(
             "material_locations_pincode_format",
             sql`${table.pincode} IS NULL OR ${table.pincode} ~ '^[0-9]{6}$'`,

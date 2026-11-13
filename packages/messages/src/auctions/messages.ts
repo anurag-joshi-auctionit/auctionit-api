@@ -419,6 +419,8 @@ export const AuctionsErrorMessages = {
   INVALID_AUCTION_OR_LOT_ID: "Invalid auction or lot id",
   INVALID_AUCTION_OR_STAGING_ID: "Invalid auction or staging id",
   INVALID_ADDITIONAL_FIELD_VALUE_ID: "Invalid additional field value id",
+  INVALID_IMPORT_JOB_ID: "Invalid import job id",
+  IMPORT_JOB_NOT_FOUND: "Import job not found",
   AUCTION_NOT_FOUND: "Auction not found",
   LOT_NOT_FOUND: "Lot not found",
   ACTIVE_CATALOGUE_NOT_FOUND: "No active catalogue found",

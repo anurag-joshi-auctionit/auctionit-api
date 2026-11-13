@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { auctions } from "./auctions.js";
 import { benchmarkMaterialLocations } from "./benchmark-material-locations.js";
+import { bidders } from "./bidders.js";
 import { clients } from "./clients.js";
 import { items } from "./items.js";
 import { materialLocations } from "./material-locations.js";
@@ -63,8 +64,8 @@ export const auctionLots = pgTable(
     latestLiftedQty: numeric("latest_lifted_qty", { precision: 18, scale: 3 })
       .notNull()
       .default("0"),
-    winnerUserId: integer("winner_user_id"),
-    winnerBidderId: integer("winner_bidder_id"),
+    winnerUserId: integer("winner_user_id").references(() => users.id),
+    winnerBidderId: integer("winner_bidder_id").references(() => bidders.id),
     winningAmount: numeric("winning_amount", { precision: 18, scale: 2 }),
     // Live anti-sniping: when a bid extends a lot, the effective end time is
     // stored here (overriding the derived auction_date + end_time). last_bid_extension_count

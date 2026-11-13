@@ -40,6 +40,8 @@ export const AuthErrorMessages = {
   OTP_RESEND_TOO_SOON: "Please wait before requesting another OTP.",
   LOGIN_RATE_LIMITED:
     "Too many failed sign-in attempts. Please wait a few minutes and try again.",
+  AUTH_RATE_LIMITED:
+    "Too many requests. Please wait a few minutes and try again.",
   TEMP_PASSWORD_EMAIL_FAILED:
     "Password was updated, but the temporary password email could not be sent.",
   CURRENT_PASSWORD_INVALID: "Current password is incorrect.",

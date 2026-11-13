@@ -4,9 +4,9 @@ import {
   check,
   index,
   integer,
+  numeric,
   pgEnum,
   pgTable,
-  real,
   smallint,
   timestamp,
   varchar,
@@ -52,7 +52,11 @@ export const clients = pgTable(
     serviceFeeType: serviceFeeTypeEnum("service_fee_type")
       .notNull()
       .default("service_percentage"),
-    serviceFeeValue: real("service_fee_value").notNull(),
+    serviceFeeValue: numeric("service_fee_value", {
+      precision: 18,
+      scale: 4,
+      mode: "number",
+    }).notNull(),
     isLastBidExtension: boolean("is_last_bid_extension").notNull(),
     lastBidExtensionWindow: smallint("last_bid_extension_window")
       .notNull()

@@ -12,6 +12,7 @@ import { auctionLots } from "./auction-lots.js";
 import { auctions } from "./auctions.js";
 import { clients } from "./clients.js";
 import { items } from "./items.js";
+import { liftingClientDispositions } from "./lifting-dispositions.js";
 import { users } from "./users.js";
 
 /**
@@ -37,7 +38,9 @@ export const liftingClientLogs = pgTable(
     itemId: integer("item_id").references(() => items.id),
     qty: numeric("qty", { precision: 18, scale: 3 }).notNull(),
     /** Maps to `lifting_client_dispositions.id` (1=OPEN … 5=LOT_CANCELLED). */
-    liftingStatus: integer("lifting_status").notNull(),
+    liftingStatus: integer("lifting_status")
+      .notNull()
+      .references(() => liftingClientDispositions.id),
     odn: varchar("odn", { length: 20 }),
     createdBy: integer("created_by")
       .notNull()

@@ -1,5 +1,6 @@
 import {
   date,
+  index,
   integer,
   numeric,
   pgEnum,
@@ -118,5 +119,7 @@ export const serviceInvoices = pgTable(
   },
   (table) => [
     uniqueIndex("service_invoices_invoice_number_uidx").on(table.invoiceNumber),
+    index("service_invoices_client_id_idx").on(table.clientId),
+    index("service_invoices_plant_location_id_idx").on(table.plantLocationId),
   ],
 );

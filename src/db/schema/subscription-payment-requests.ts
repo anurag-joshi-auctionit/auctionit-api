@@ -1,4 +1,5 @@
 import {
+  index,
   integer,
   numeric,
   pgTable,
@@ -55,4 +56,13 @@ export const subscriptionPaymentRequests = pgTable(
       .defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }),
   },
+  (table) => [
+    index("subscription_payment_requests_bidder_id_idx").on(table.bidderId),
+    index("subscription_payment_requests_subscription_type_id_idx").on(
+      table.subscriptionTypeId,
+    ),
+    index("subscription_payment_requests_subscription_id_idx").on(
+      table.subscriptionId,
+    ),
+  ],
 );

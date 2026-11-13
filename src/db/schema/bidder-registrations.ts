@@ -1,6 +1,7 @@
 import {
   boolean,
   date,
+  index,
   integer,
   numeric,
   pgTable,
@@ -16,7 +17,9 @@ import { users } from "./users.js";
 // payment details and the admin approval workflow. Legacy country/state/city
 // ids are kept as-is rather than resolved against the locations master because
 // this is raw, user-submitted registration data.
-export const bidderRegistrations = pgTable("bidder_registrations", {
+export const bidderRegistrations = pgTable(
+  "bidder_registrations",
+  {
   //identity
   id: integer("id").primaryKey().notNull(),
   companyName: varchar("company_name", { length: 100 }),
@@ -109,4 +112,6 @@ export const bidderRegistrations = pgTable("bidder_registrations", {
   createdBy: integer("created_by").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }),
   updatedBy: integer("updated_by").references(() => users.id),
-});
+  },
+  (table) => [index("bidder_registrations_bidder_id_idx").on(table.bidderId)],
+);

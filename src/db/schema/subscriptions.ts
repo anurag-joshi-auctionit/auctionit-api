@@ -1,5 +1,6 @@
 import {
   date,
+  index,
   integer,
   numeric,
   pgEnum,
@@ -99,5 +100,9 @@ export const subscriptions = pgTable(
   },
   (table) => [
     uniqueIndex("subscriptions_invoice_number_uidx").on(table.invoiceNumber),
+    index("subscriptions_bidder_id_idx").on(table.bidderId),
+    index("subscriptions_subscription_type_id_idx").on(
+      table.subscriptionTypeId,
+    ),
   ],
 );

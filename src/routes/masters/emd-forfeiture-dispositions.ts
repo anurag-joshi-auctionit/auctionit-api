@@ -8,10 +8,18 @@ import {
   masterPatchSchema,
 } from "../../lib/validation/masters.js";
 import {
+  cacheKey,
+  invalidateCachePrefix,
+  MASTERS_CACHE_TTL_SECONDS,
+  withCache,
+} from "../../lib/cache.js";
+import {
   MasterConflictError,
   MasterNotFoundError,
   emdForfeitureDispositionsMasterService,
 } from "../../services/masters/emd-forfeiture-dispositions.service.js";
+
+const CACHE_PREFIX = "cache:masters:emd-forfeiture-dispositions";
 
 const router = Router();
 
@@ -28,7 +36,13 @@ router.get("/", requireAuth, requireAnyPermission(READ), async (req, res) => {
     res.status(400).json(zodValidationErrorBody(parsed.error));
     return;
   }
-  res.json(await emdForfeitureDispositionsMasterService.listPaginated(parsed.data));
+  res.json(
+    await withCache(
+      cacheKey(CACHE_PREFIX, parsed.data),
+      MASTERS_CACHE_TTL_SECONDS,
+      () => emdForfeitureDispositionsMasterService.listPaginated(parsed.data),
+    ),
+  );
 });
 
 router.post("/", requireAuth, requireAnyPermission(WRITE), async (req, res) => {
@@ -38,7 +52,9 @@ router.post("/", requireAuth, requireAnyPermission(WRITE), async (req, res) => {
     return;
   }
   try {
-    res.status(201).json(await emdForfeitureDispositionsMasterService.create(parsed.data, req.user?.id));
+    const row = await emdForfeitureDispositionsMasterService.create(parsed.data, req.user?.id);
+    await invalidateCachePrefix(CACHE_PREFIX);
+    res.status(201).json(row);
   } catch (err) {
     if (err instanceof MasterConflictError) {
       res.status(409).json({ error: err.message });
@@ -56,7 +72,9 @@ router.patch("/:id", requireAuth, requireAnyPermission(WRITE), async (req, res) 
   }
   const id = z.string().trim().parse(req.params.id);
   try {
-    res.json(await emdForfeitureDispositionsMasterService.update(id, parsed.data, req.user?.id));
+    const row = await emdForfeitureDispositionsMasterService.update(id, parsed.data, req.user?.id);
+    await invalidateCachePrefix(CACHE_PREFIX);
+    res.json(row);
   } catch (err) {
     if (err instanceof MasterNotFoundError) {
       res.status(404).json({ error: err.message });

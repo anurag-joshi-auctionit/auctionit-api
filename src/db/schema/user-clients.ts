@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   pgTable,
   primaryKey,
@@ -29,5 +30,8 @@ export const userClients = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }),
     updatedBy: integer("updated_by").references(() => users.id),
   },
-  (table) => [primaryKey({ columns: [table.userId, table.clientId] })],
+  (table) => [
+    primaryKey({ columns: [table.userId, table.clientId] }),
+    index("user_clients_client_id_idx").on(table.clientId),
+  ],
 );

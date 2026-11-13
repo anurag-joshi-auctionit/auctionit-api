@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import { randomUUID } from "node:crypto";
+import { pinoHttp } from "pino-http";
+import { logger } from "./lib/logger.js";
 import {
   createSocketServer,
   getActiveAuctionIds,
@@ -21,6 +24,10 @@ import {
 } from "./lib/auctions/no-bid-extension.js";
 import { emdSettlementService } from "./services/emd-settlement.service.js";
 import { EMD_SETTLEMENT_TICK_MS } from "./lib/emd/constants.js";
+import {
+  additionalFieldsImportJobsService,
+  ADDITIONAL_FIELDS_IMPORT_TICK_MS,
+} from "./services/additional-fields-import-jobs.service.js";
 import { enqueueConcludedNotifications } from "./services/auction-notification.service.js";
 import { getPoolMetrics } from "./db/index.js";
 import { bootstrapPermissionCatalog } from "./services/roles.service.js";
@@ -32,6 +39,21 @@ const app = express();
 if (env.TRUST_PROXY) {
   app.set("trust proxy", 1);
 }
+
+app.use(
+  pinoHttp({
+    logger,
+    genReqId: (req, res) => {
+      const existing = req.headers["x-request-id"];
+      const id = typeof existing === "string" && existing.length > 0 ? existing : randomUUID();
+      res.setHeader("x-request-id", id);
+      return id;
+    },
+    autoLogging: {
+      ignore: (req) => req.url === "/health",
+    },
+  }),
+);
 
 app.use(cors({ origin: env.CORS_ORIGINS, credentials: true }));
 app.use(express.json({ limit: "25mb" }));
@@ -54,12 +76,12 @@ for (const { prefix, router } of routeMounts) {
 app.use(
   (
     err: unknown,
-    _req: express.Request,
+    req: express.Request,
     res: express.Response,
     _next: express.NextFunction,
   ) => {
-    console.error(err);
-    res.status(500).json({ error: "Internal server error" });
+    (req.log ?? logger).error({ err }, "unhandled request error");
+    res.status(500).json({ error: "Internal server error", requestId: req.id });
   },
 );
 
@@ -177,6 +199,27 @@ void createSocketServer(httpServer).then(async () => {
           settling = false;
         });
     }, EMD_SETTLEMENT_TICK_MS);
+  }
+
+  {
+    let importing = false;
+    setInterval(() => {
+      if (importing) return;
+      importing = true;
+      void additionalFieldsImportJobsService
+        .tick()
+        .then((result) => {
+          if (result.processed > 0 || result.failed > 0) {
+            console.log(
+              `additional-fields import: ${result.processed} done, ${result.failed} failed`,
+            );
+          }
+        })
+        .catch((err) => console.error("additional-fields import tick failed", err))
+        .finally(() => {
+          importing = false;
+        });
+    }, ADDITIONAL_FIELDS_IMPORT_TICK_MS);
   }
 
   httpServer.listen(env.PORT, () => {

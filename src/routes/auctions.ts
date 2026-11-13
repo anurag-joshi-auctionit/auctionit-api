@@ -22,9 +22,11 @@ import {
   sendCatalogueNotificationSchema,
 } from "../lib/auctions/schemas.js";
 import {
+  additionalFieldsImportR2Key,
   MAX_AUCTION_DOCUMENT_BYTES,
   MAX_AUCTION_DOCUMENT_MB,
 } from "../lib/auction-r2-keys.js";
+import { putObject } from "../lib/r2.js";
 import { zodValidationErrorBody, fieldValidationErrorBody } from "../lib/validation-error.js";
 import { handleEmdError } from "../lib/emd/errors.js";
 import {
@@ -54,6 +56,7 @@ import {
   sendCatalogueNotification,
 } from "../services/catalogue-notification.service.js";
 import { auctionAdditionalFieldsService } from "../services/auction-additional-fields.service.js";
+import { additionalFieldsImportJobsService } from "../services/additional-fields-import-jobs.service.js";
 import {
   pgGetAuctionClientId,
   pgGetAuctionLotWriteContext,
@@ -1276,9 +1279,40 @@ router.post(
     }
     try {
       const userId = req.user?.id ?? 1;
-      res.json(
-        await auctionAdditionalFieldsService.importXlsx(id, file.buffer, userId),
-      );
+      const fileKey = additionalFieldsImportR2Key(id);
+      await putObject({
+        key: fileKey,
+        body: file.buffer,
+        contentType: XLSX_MIME,
+      });
+      const job = await additionalFieldsImportJobsService.enqueue({
+        auctionId: id,
+        fileKey,
+        userId,
+      });
+      res.status(202).json({ jobId: job.id });
+    } catch (e) {
+      handleAuctionError(e, res, next);
+    }
+  },
+);
+
+router.get(
+  "/:id/additional-fields/import/:jobId",
+  async (req, res, next) => {
+    const id = parseId(req.params.id);
+    const jobId = parseId(req.params.jobId);
+    if (!id || !jobId) {
+      res.status(400).json({ error: AuctionsErrorMessages.INVALID_IMPORT_JOB_ID });
+      return;
+    }
+    try {
+      const job = await additionalFieldsImportJobsService.getStatus(jobId);
+      if (!job || job.auctionId !== id) {
+        res.status(404).json({ error: AuctionsErrorMessages.IMPORT_JOB_NOT_FOUND });
+        return;
+      }
+      res.json(job);
     } catch (e) {
       handleAuctionError(e, res, next);
     }

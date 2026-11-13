@@ -8,10 +8,18 @@ import {
   dispositionsMasterListQuerySchema,
 } from "../../lib/validation/masters.js";
 import {
+  cacheKey,
+  invalidateCachePrefix,
+  MASTERS_CACHE_TTL_SECONDS,
+  withCache,
+} from "../../lib/cache.js";
+import {
   MasterConflictError,
   MasterNotFoundError,
   liftingBidderDispositionMasterService,
 } from "../../services/masters/lifting-bidder-disposition.service.js";
+
+const CACHE_PREFIX = "cache:masters:lifting-bidder-disposition";
 
 const router = Router();
 
@@ -23,7 +31,11 @@ router.get("/", requireAuth, requireAnyPermission(["module.masters", "masters.li
   }
 
   try {
-    const result = await liftingBidderDispositionMasterService.listPaginated(parsed.data);
+    const result = await withCache(
+      cacheKey(CACHE_PREFIX, parsed.data),
+      MASTERS_CACHE_TTL_SECONDS,
+      () => liftingBidderDispositionMasterService.listPaginated(parsed.data),
+    );
     res.json(result);
   } catch (err) {
     next(err);
@@ -32,7 +44,11 @@ router.get("/", requireAuth, requireAnyPermission(["module.masters", "masters.li
 
 router.get("/options", requireAuth, requireAnyPermission(["module.masters", "masters.lifting-bidder-disposition.read", "masters.lifting-bidder-disposition.write"]), async (_req, res, next) => {
   try {
-    const rows = await liftingBidderDispositionMasterService.list(true);
+    const rows = await withCache(
+      `${CACHE_PREFIX}:options`,
+      MASTERS_CACHE_TTL_SECONDS,
+      () => liftingBidderDispositionMasterService.list(true),
+    );
     res.json(rows);
   } catch (err) {
     next(err);
@@ -51,6 +67,7 @@ router.post("/", requireAuth, requireAnyPermission(["module.masters", "masters.l
       parsed.data,
       req.user?.id,
     );
+    await invalidateCachePrefix(CACHE_PREFIX);
     res.status(201).json(row);
   } catch (err) {
     if (err instanceof MasterConflictError) {
@@ -76,6 +93,7 @@ router.patch("/:id", requireAuth, requireAnyPermission(["module.masters", "maste
       parsed.data,
       req.user?.id,
     );
+    await invalidateCachePrefix(CACHE_PREFIX);
     res.json(row);
   } catch (err) {
     if (err instanceof MasterNotFoundError) {

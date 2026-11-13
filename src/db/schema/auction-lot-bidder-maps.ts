@@ -7,6 +7,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { auctionLots } from "./auction-lots.js";
 import { auctions } from "./auctions.js";
 import { bidders } from "./bidders.js";
 import { clients } from "./clients.js";
@@ -25,7 +26,7 @@ export const auctionLotBidderMaps = pgTable(
     bidderId: integer("bidder_id")
       .notNull()
       .references(() => bidders.id),
-    lotId: integer("lot_id"),
+    lotId: integer("lot_id").references(() => auctionLots.id),
     isEmdWithClient: boolean("is_emd_with_client").default(false),
     // Set when the auction close released this lot's EMD (not won); cleared when
     // the bidder is re-attached to the lot after a reopen.

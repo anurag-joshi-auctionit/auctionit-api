@@ -7,6 +7,7 @@ export const LiveAuctionMessages = {
   AUCTION_IDS_REQUIRED: "auctionIds is required",
   SSE_DISABLED: "SSE transport is disabled",
   SSE_CAPACITY_REACHED: "SSE capacity reached",
+  BID_RATE_LIMITED: "Too many bid attempts on this lot. Please slow down and try again.",
 } as const;
 
 /** Bidder portal auction access errors (catalogue / TnC / detail). */

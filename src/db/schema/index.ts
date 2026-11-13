@@ -18,6 +18,7 @@ export * from "./auction-lot-import-staging.js";
 export * from "./auction-lot-bidder-maps.js";
 export * from "./auction-lot-emd-ranges.js";
 export * from "./additional-fields.js";
+export * from "./additional-fields-import-jobs.js";
 export * from "./auction-document-types.js";
 export * from "./auction-documents.js";
 export * from "./auction-lot-confirmation-documents.js";

@@ -1,4 +1,5 @@
 import {
+  index,
   integer,
   pgEnum,
   pgTable,
@@ -53,4 +54,11 @@ export const auctionCatalogueNotifications = pgTable(
       .notNull()
       .defaultNow(),
   },
+  (table) => [
+    index("auction_catalogue_notifications_auction_id_idx").on(
+      table.auctionId,
+    ),
+    index("auction_catalogue_notifications_client_id_idx").on(table.clientId),
+    index("auction_catalogue_notifications_sent_by_idx").on(table.sentBy),
+  ],
 );

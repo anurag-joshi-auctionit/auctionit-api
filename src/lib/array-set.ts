@@ -63,6 +63,59 @@ export async function unionIntArrayColumn(
   return (result.rowCount ?? 0) > 0;
 }
 
+/**
+ * Same as `unionIntArrayColumn` but applies the same `ids` union to every row
+ * in `rowIds` in one round trip, instead of one UPDATE per row.
+ */
+export async function unionIntArrayColumnMany(
+  executor: SqlExecutor,
+  opts: {
+    table: "clients" | "bidders";
+    column: "materials" | "bidders";
+    rowIds: number[];
+    ids: number[];
+    updatedBy?: number | null;
+  },
+): Promise<number> {
+  const rowIds = uniquePositiveIds(opts.rowIds);
+  const ids = uniquePositiveIds(opts.ids);
+  if (rowIds.length === 0 || ids.length === 0) return 0;
+
+  const idsSql = sql`ARRAY[${sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  )}]::int[]`;
+  const rowIdsSql = sql`ARRAY[${sql.join(
+    rowIds.map((id) => sql`${id}`),
+    sql`, `,
+  )}]::int[]`;
+
+  const updatedBy =
+    opts.updatedBy != null && Number.isInteger(opts.updatedBy)
+      ? opts.updatedBy
+      : null;
+
+  const result = await executor.execute(sql`
+    UPDATE ${sql.raw(opts.table)}
+    SET ${sql.raw(opts.column)} = (
+      SELECT COALESCE(
+        ARRAY(
+          SELECT DISTINCT x
+          FROM unnest(${sql.raw(opts.column)} || ${idsSql}) AS t(x)
+          ORDER BY x
+        ),
+        '{}'::int[]
+      )
+    ),
+    updated_at = now(),
+    updated_by = COALESCE(${updatedBy}, updated_by)
+    WHERE id = ANY(${rowIdsSql})
+      AND NOT (${sql.raw(opts.column)} @> ${idsSql})
+  `);
+
+  return result.rowCount ?? 0;
+}
+
 export async function unionClientMaterials(
   executor: SqlExecutor,
   clientId: number,
@@ -103,6 +156,21 @@ export async function unionBidderMaterials(
     table: "bidders",
     column: "materials",
     rowId: bidderId,
+    ids: materialIds,
+    updatedBy,
+  });
+}
+
+export async function unionBidderMaterialsMany(
+  executor: SqlExecutor,
+  bidderIds: number[],
+  materialIds: number[],
+  updatedBy?: number | null,
+): Promise<number> {
+  return unionIntArrayColumnMany(executor, {
+    table: "bidders",
+    column: "materials",
+    rowIds: bidderIds,
     ids: materialIds,
     updatedBy,
   });

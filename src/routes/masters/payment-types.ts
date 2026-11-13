@@ -7,10 +7,17 @@ import {
 } from "../../lib/payment-types/schemas.js";
 import { zodValidationErrorBody } from "../../lib/validation-error.js";
 import {
+  invalidateCachePrefix,
+  MASTERS_CACHE_TTL_SECONDS,
+  withCache,
+} from "../../lib/cache.js";
+import {
   PaymentTypeNotFoundError,
   PaymentTypeValidationError,
   paymentTypesMasterService,
 } from "../../services/masters/payment-types.service.js";
+
+const CACHE_PREFIX = "cache:masters:payment-types";
 
 const router = Router();
 router.use(requireAuth, requireAnyPermission(["module.masters"]));
@@ -35,7 +42,12 @@ function handleError(e: unknown, res: Response): boolean {
 
 router.get("/", async (_req, res, next) => {
   try {
-    res.json({ items: await paymentTypesMasterService.list(false) });
+    const items = await withCache(
+      `${CACHE_PREFIX}:list`,
+      MASTERS_CACHE_TTL_SECONDS,
+      () => paymentTypesMasterService.list(false),
+    );
+    res.json({ items });
   } catch (e) {
     next(e);
   }
@@ -43,7 +55,12 @@ router.get("/", async (_req, res, next) => {
 
 router.get("/options", async (_req, res, next) => {
   try {
-    res.json(await paymentTypesMasterService.list(true));
+    const rows = await withCache(
+      `${CACHE_PREFIX}:options`,
+      MASTERS_CACHE_TTL_SECONDS,
+      () => paymentTypesMasterService.list(true),
+    );
+    res.json(rows);
   } catch (e) {
     next(e);
   }
@@ -61,6 +78,7 @@ router.post("/", async (req, res, next) => {
       parsed.data,
       req.user?.id,
     );
+    await invalidateCachePrefix(CACHE_PREFIX);
     res.status(201).json(row);
   } catch (e) {
     if (handleError(e, res)) return;
@@ -87,6 +105,7 @@ router.patch("/:id", async (req, res, next) => {
       parsed.data,
       req.user?.id,
     );
+    await invalidateCachePrefix(CACHE_PREFIX);
     res.json(row);
   } catch (e) {
     if (handleError(e, res)) return;

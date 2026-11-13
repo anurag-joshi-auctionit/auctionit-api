@@ -27,6 +27,9 @@ const schema = z.object({
         .filter(Boolean),
     ),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  LOG_LEVEL: z
+    .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
+    .optional(),
   // When false, password login issues a full session without email/SMS OTP.
   AUTH_2FA_ENABLED: boolFromEnv.default(true),
   // When true, every SQL query (with params) is logged to the console.

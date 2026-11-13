@@ -16,7 +16,8 @@ import { BinaryFile, ErrorBody, IdParam, OkBody, OptionIdsResult, ValidationErro
 import { documentRouter, type ResponseDoc } from "../define.js";
 import {
   AuctionAdditionalFieldLots,
-  AuctionAdditionalFieldsImportResult,
+  AuctionAdditionalFieldsImportJobAccepted,
+  AuctionAdditionalFieldsImportJobStatus,
   AuctionAdditionalFieldsOverview,
   AuctionApprovalLots,
   AuctionBidderPool,
@@ -754,10 +755,21 @@ r.post("/:id/additional-fields/import", {
   summary: "Import additional field values from Excel",
   description:
     "Sync import keyed by (Lot No., field): matching rows update, new rows are added, and saved values of active fields " +
-    "missing from the file are deleted. Every row must validate first; inactive fields are untouched.",
+    "missing from the file are deleted. Every row must validate first; inactive fields are untouched. " +
+    "The file is uploaded and queued for background processing; poll `/additional-fields/import/{jobId}` for the result.",
   params: IdParam,
   body: xlsxUploadBody,
-  responses: { 200: AuctionAdditionalFieldsImportResult, 400: xlsxUpload400, 404: notFound },
+  responses: { 202: AuctionAdditionalFieldsImportJobAccepted, 400: xlsxUpload400, 404: notFound },
+});
+
+r.get("/:id/additional-fields/import/:jobId", {
+  summary: "Get additional fields import job status",
+  description: "Poll this after queuing an import. `result` is set once `status` is `done`.",
+  params: z.object({ id: z.coerce.number().int().positive(), jobId: z.coerce.number().int().positive() }),
+  responses: {
+    200: AuctionAdditionalFieldsImportJobStatus,
+    404: { description: "Import job not found.", schema: ErrorBody },
+  },
 });
 
 r.post("/:id/lot-bidder-map/submit", {

@@ -124,6 +124,11 @@ const requestedDaySql = sql`(${emdForfeitures.requestedAt} AT TIME ZONE 'Asia/Ko
 /** Review date once decided, request date while pending. */
 const periodDateSql = sql`COALESCE(${emdForfeitures.reviewedAt}, ${emdForfeitures.requestedAt})`;
 
+/** Groups a (auction, bidder, range) triple into a single Map key. */
+function heldKey(auctionId: number, bidderId: number, emdRangeId: number | null): string {
+  return `${auctionId}:${bidderId}:${emdRangeId ?? "null"}`;
+}
+
 const VIEW_CONDITIONS: Record<EmdForfeitureView, SQL> = {
   requested: eq(emdForfeitures.status, "requested"),
   forfeited: eq(emdForfeitures.status, "forfeited"),
@@ -145,20 +150,30 @@ export class EmdForfeituresService {
     return rows;
   }
 
-  /** EMD currently held for one (auction, bidder, range). */
-  private async heldFor(
+  /** EMD currently held for every (auction, bidder, range) in `targets`, in one query. */
+  private async heldForMany(
     tx: Tx,
-    auctionId: number,
-    bidderId: number,
-    emdRangeId: number | null,
-  ): Promise<number> {
-    const result = await tx.execute<{ held: string | null }>(sql`
-      SELECT SUM(w.held) AS held
-      FROM (${holdsByRangeSql([bidderId])}) w
-      WHERE w.auction_id = ${auctionId}
-        AND w.emd_range_id IS NOT DISTINCT FROM ${emdRangeId}::int
+    targets: { auctionId: number; bidderId: number; emdRangeId: number | null }[],
+  ): Promise<Map<string, number>> {
+    const bidderIds = [...new Set(targets.map((t) => t.bidderId))];
+    const result = await tx.execute<{
+      auction_id: number;
+      bidder_id: number;
+      emd_range_id: number | null;
+      held: string | null;
+    }>(sql`
+      SELECT w.auction_id, w.bidder_id, w.emd_range_id, SUM(w.held) AS held
+      FROM (${holdsByRangeSql(bidderIds)}) w
+      GROUP BY w.auction_id, w.bidder_id, w.emd_range_id
     `);
-    return round2(toAmount(result.rows[0]?.held));
+    const map = new Map<string, number>();
+    for (const row of result.rows) {
+      map.set(
+        heldKey(row.auction_id, row.bidder_id, row.emd_range_id),
+        round2(toAmount(row.held)),
+      );
+    }
+    return map;
   }
 
   private filterConditions(f: EmdForfeitureFilters): (SQL | undefined)[] {
@@ -435,14 +450,22 @@ export class EmdForfeituresService {
       const openKeys = new Set(open.map(keyOf));
 
       const now = formatUtcNow();
+      const held = await this.heldForMany(
+        tx,
+        input.items.map((item) => ({
+          auctionId: input.auctionId,
+          bidderId: item.bidderId,
+          emdRangeId: item.emdRangeId,
+        })),
+      );
       const values = [];
       for (const [index, item] of input.items.entries()) {
         if (openKeys.has(keyOf(item))) {
           addRowError(index, EmdErrorMessages.FORFEITURE_ALREADY_OPEN);
           continue;
         }
-        const held = await this.heldFor(tx, input.auctionId, item.bidderId, item.emdRangeId);
-        if (held <= 0) {
+        const h = held.get(heldKey(input.auctionId, item.bidderId, item.emdRangeId)) ?? 0;
+        if (h <= 0) {
           addRowError(index, EmdErrorMessages.FORFEITURE_NO_WINNING);
           continue;
         }
@@ -450,7 +473,7 @@ export class EmdForfeituresService {
           auctionId: input.auctionId,
           bidderId: item.bidderId,
           emdRangeId: item.emdRangeId,
-          amount: held.toFixed(2),
+          amount: h.toFixed(2),
           dispositionId: item.dispositionId,
           requestedRemarks: item.requestedRemarks,
           status: "requested" as const,
@@ -487,9 +510,10 @@ export class EmdForfeituresService {
       if (input.approve) {
         const bidderIds = [...new Set(locked.map((r) => r.bidderId))];
         await emdTransactionsService.lockBidders(tx, bidderIds);
+        const held = await this.heldForMany(tx, locked);
         for (const r of locked) {
-          const held = await this.heldFor(tx, r.auctionId, r.bidderId, r.emdRangeId);
-          if (held < round2(toAmount(r.amount))) {
+          const h = held.get(heldKey(r.auctionId, r.bidderId, r.emdRangeId)) ?? 0;
+          if (h < round2(toAmount(r.amount))) {
             throw EmdError.conflict(EmdErrorMessages.FORFEITURE_WINNING_CHANGED);
           }
         }
@@ -507,21 +531,35 @@ export class EmdForfeituresService {
         })
         .where(inArray(emdForfeitures.id, locked.map((r) => r.id)));
       if (input.approve) {
+        const forfeitedByKey = new Map<
+          string,
+          { auctionId: number; bidderId: number; emdRangeId: number | null; amt: number }
+        >();
         for (const r of locked) {
-          await tx.execute(sql`
-            UPDATE emd_range_holds
-            SET amount_forfeited = amount_forfeited + ${round2(toAmount(r.amount))}, updated_at = now()
-            WHERE auction_id = ${r.auctionId} AND bidder_id = ${r.bidderId}
-              AND emd_range_id IS NOT DISTINCT FROM ${r.emdRangeId}::int
-          `);
+          const key = heldKey(r.auctionId, r.bidderId, r.emdRangeId);
+          const amt = round2(toAmount(r.amount));
+          const existing = forfeitedByKey.get(key);
+          if (existing) existing.amt += amt;
+          else forfeitedByKey.set(key, { auctionId: r.auctionId, bidderId: r.bidderId, emdRangeId: r.emdRangeId, amt });
         }
+        const values = [...forfeitedByKey.values()].map(
+          (v) => sql`(${v.auctionId}, ${v.bidderId}, ${v.emdRangeId}::int, ${v.amt}::numeric)`,
+        );
+        await tx.execute(sql`
+          UPDATE emd_range_holds h
+          SET amount_forfeited = h.amount_forfeited + v.amt, updated_at = now()
+          FROM (VALUES ${sql.join(values, sql`, `)}) AS v(auction_id, bidder_id, emd_range_id, amt)
+          WHERE h.auction_id = v.auction_id
+            AND h.bidder_id = v.bidder_id
+            AND h.emd_range_id IS NOT DISTINCT FROM v.emd_range_id
+        `);
         await this.markForfeitedNarration(tx, locked.map((r) => r.id));
         await emdTransactionsService.refreshBalances(tx, [...new Set(locked.map((r) => r.bidderId))]);
       }
       return locked;
     });
     if (input.approve) {
-      for (const r of rows) await this.notifyBidder(r.id, input.userId);
+      await Promise.all(rows.map((r) => this.notifyBidder(r.id, input.userId)));
     }
     return { updated: rows.length };
   }
@@ -541,23 +579,23 @@ export class EmdForfeituresService {
       .innerJoin(auctions, eq(auctions.id, emdForfeitures.auctionId))
       .leftJoin(emdForfeitureDispositions, eq(emdForfeitureDispositions.id, emdForfeitures.dispositionId))
       .where(inArray(emdForfeitures.id, ids));
-    for (const r of rows) {
+    if (rows.length === 0) return;
+    const values = rows.map((r) => {
       const narration = renderNarration(EMD_FORFEITED_NARRATION, {
         auctionNo: r.auctionNumber ?? `#${r.auctionId}`,
         reason: r.dispositionLabel ?? r.requestedRemarks,
       });
-      await tx
-        .update(emdTransactions)
-        .set({ narration })
-        .where(
-          and(
-            eq(emdTransactions.bidderId, r.bidderId),
-            eq(emdTransactions.auctionId, r.auctionId),
-            eq(emdTransactions.emdType, "blocked_winning"),
-            sql`${emdTransactions.emdRangeId} IS NOT DISTINCT FROM ${r.emdRangeId}::int`,
-          ),
-        );
-    }
+      return sql`(${r.bidderId}, ${r.auctionId}, ${r.emdRangeId}::int, ${narration})`;
+    });
+    await tx.execute(sql`
+      UPDATE emd_transactions t
+      SET narration = v.narration
+      FROM (VALUES ${sql.join(values, sql`, `)}) AS v(bidder_id, auction_id, emd_range_id, narration)
+      WHERE t.bidder_id = v.bidder_id
+        AND t.auction_id = v.auction_id
+        AND t.emd_type = 'blocked_winning'
+        AND t.emd_range_id IS NOT DISTINCT FROM v.emd_range_id
+    `);
   }
 
   /** Records one transfer to the client covering the selected forfeited rows. */
