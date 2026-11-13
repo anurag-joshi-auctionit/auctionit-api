@@ -1,0 +1,27 @@
+{
+  "name": "@auctionit/xlsx-import",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./coerce": "./src/coerce.ts",
+    "./date": "./src/date.ts",
+    "./headers": "./src/headers.ts",
+    "./read-xlsx": "./src/read-xlsx.ts",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@auctionit/messages": "workspace:*",
+    "@auctionit/lib": "workspace:*",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}

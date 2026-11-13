@@ -1,0 +1,1 @@
+export const MATERIALS_EXPORT_MAX_ROWS = 5_000;

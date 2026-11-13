@@ -1,0 +1,745 @@
+Database seed pipeline — run in this order
+============================================
+
+Run from apps/api (or `pnpm --filter @auctionit/api <script>` from repo root).
+
+Orchestrator: `./src/db/seed/seed.sh` runs the DB phases (A → C) and then the
+file/document upload phase (R2) in order.
+
+  ./src/db/seed/seed.sh              # full pipeline (DB phases + R2 uploads)
+  ./src/db/seed/seed.sh --db-only    # DB phases A–C only, no R2 uploads
+  ./src/db/seed/seed.sh --files-only # only file/document uploads to R2
+  ./src/db/seed/seed.sh --clean      # dry-run truncate (row counts only)
+  ./src/db/seed/seed.sh --clean-yes  # truncate default tables, then seed
+
+
+Overview
+--------
+
+This folder is a MSSQL → Postgres migration ETL pipeline plus Postgres-only
+reference seeds. It is NOT a minimal dev-fixture set.
+
+  Phase A  — Postgres-only (no MSSQL env required)
+  Phase B  — MSSQL → Postgres core entities and links
+  Phase C  — MSSQL → Postgres dependent data (auctions, EMD)
+  Phase R2 — File/document uploads to R2 (bidder docs, auction docs, SI docs)
+
+The R2 phase is split out from the DB phases because those seeds fetch legacy
+blobs/files and upload them to R2 (object storage), which needs R2 credentials
+and is slower/networked. Run it via `--files-only`, or as the tail of the full
+pipeline (default). It runs AFTER the DB phases so bidders/auctions and their
+document-type rows already exist. seed:bidder-documents self-backfills
+bidder_bank_accounts.cancelled_cheque_file_name, so it is safe to run after
+seed:bidder-bank-accounts (Phase B).
+
+MSSQL maintenance scripts (write to legacy MSSQL only, NOT Postgres) live in
+`src/db/mssql-maintenance/` — see "MSSQL maintenance" at the bottom.
+
+
+0. (Optional) Clean Postgres tables before re-seeding
+-----------------------------------------------------
+
+Dry-run first (prints row counts, deletes nothing):
+
+    pnpm clean:db
+
+Default truncate (RESTART IDENTITY CASCADE on material_locations, plant_locations,
+clients, locations):
+
+    pnpm clean:db --yes
+
+`users` is NOT in the default clean target — pass --tables=users --yes to wipe it.
+
+Override the table set:
+
+    pnpm clean:db --tables=locations --yes
+
+For a full re-migration you may need to truncate additional tables explicitly,
+e.g. bidders, users, auctions, emd_transactions.
+
+
+=== Phase A — Postgres-only reference data ===
+(No MSSQL_SERVER / MSSQL_* required)
+
+
+A1. seed:locations — REQUIRED (prod + dev masters)
+    Source: src/db/seed/data/cities.csv (India states + cities).
+    Populates `locations` for resolving client/bidder location_id FKs.
+
+        pnpm seed:locations
+
+
+A2. seed:roles — REQUIRED before seed:permissions and seed:users
+    Source: src/db/schema/roles.ts (ROLE_CODES). Idempotent ON CONFLICT.
+    Target codes: admin, account, kam, client, client_limited, bidder.
+    Also remaps users still on legacy codes (account_admin → account, etc.)
+    and drops unused obsolete role rows.
+    After any roles change/remap, re-run seed:users (B1) so role_id
+    stays consistent with the current role set.
+
+        pnpm seed:roles
+
+
+A2b. seed:permissions — REQUIRED for RBAC
+    Upserts permission catalog + role_permissions defaults from @auctionit/authz.
+    Run after seed:roles (role rows must exist). Safe to re-run (never disables
+    existing grants). Does not require seed:users.
+
+        pnpm seed:permissions
+
+
+A2c. seed:bootstrap-user — REQUIRED before Phase A document-type seeds
+    Ensures users.id = 1 exists (minimal system user) so created_by /
+    updated_by FKs can resolve to the seed default actor.
+    Idempotent: no-op if user 1 already exists. Run AFTER seed:roles.
+    Full user data is overwritten later by seed:users (B1).
+
+        pnpm seed:bootstrap-user
+
+
+A3. seed:materials — REQUIRED for material taxonomy UI
+    Source: src/db/seed/data/materials.csv (level1 / level2 / level3).
+    Truncates and re-inserts `materials` each run (RESTART IDENTITY).
+
+        pnpm seed:materials
+
+
+A4. seed:sms-templates — REQUIRED for SMS sending
+    Source: hardcoded templates in seed-sms-templates.ts.
+    Populates `sms_templates` for sms.service.ts and admin send-SMS page.
+
+        pnpm seed:sms-templates
+
+
+A5. seed:client-document-types — REQUIRED for client documents upload
+    Source: hardcoded Agreement type in seed-client-document-types.ts.
+    Populates `client_document_types` (id=1, name=Agreement, prefix=agreement_).
+    Sets created_by = 1 (requires seed:bootstrap-user). Idempotent ON CONFLICT.
+    No MSSQL required.
+
+        pnpm seed:client-document-types
+
+
+A6. seed:auction-document-types — REQUIRED before seed:auction-documents
+    Source: hardcoded Catalogue (id=1) + Terms & Conditions (id=2).
+    Populates `auction_document_types` with file_name_prefix catalogue_/tnc_.
+    Sets created_by = 1 (requires seed:bootstrap-user). Idempotent ON CONFLICT.
+
+        pnpm seed:auction-document-types
+
+
+A7. seed:service-invoice-document-types — REQUIRED before seed:service-invoice-documents
+    Source: hardcoded Annexure XLSX (id=1), Annexure PDF (id=2), Invoice PDF (id=3).
+    Populates `service_invoice_document_types` with prefixes annexure_xlsx_/annexure_pdf_/invoice_pdf_.
+    Sets created_by = 1 (requires seed:bootstrap-user). Idempotent ON CONFLICT.
+    No MSSQL required.
+
+        pnpm seed:service-invoice-document-types
+
+
+A8. seed:subscription-document-types — REQUIRED before seed:subscription-documents
+    Source: hardcoded Invoice PDF (id=1).
+    Populates `subscription_document_types` with prefix invoice_pdf_.
+    Sets created_by = 1 (requires seed:bootstrap-user). Idempotent ON CONFLICT.
+    No MSSQL required.
+
+        pnpm seed:subscription-document-types
+
+
+=== Phase B — MSSQL → Postgres core ===
+(Requires MSSQL_SERVER / MSSQL_PORT / MSSQL_USER / MSSQL_PASSWORD / MSSQL_DATABASE)
+
+
+B1. seed:users — REQUIRED (prod)
+    Source: MSSQL tbl_Config_User.
+    Run AFTER seed:roles (and preferably seed:permissions). Re-run whenever
+    seed:roles was just applied or role codes changed — users.role_id is
+    re-derived from MSSQL flags against the current roles table.
+    Required so client created_by / updated_by FKs resolve.
+    Role mapping (priority top-down):
+      IsAdmin            -> admin
+      IsAdminAccount     -> account
+      IsSubAdmin         -> admin (no built-in sub_admin)
+      IsServiceProvider  -> kam
+      IsClientWithLimit  -> client_limited
+      IsClient           -> client
+      otherwise          -> bidder
+    Does not set is_owner from SEED_OWNER_EMAILS / SEED_OWNER_LOGIN (left as
+    MSSQL/column default for now).
+    Missing/0 created_by (and last_updated_by when last_updated_at is set)
+    default to user id 1.
+    email_id is seeded as-is from MSSQL (duplicates allowed; not unique).
+    All users get password Welcome@123 (hashed via AUTH_PASSWORD_HASH);
+    previous_password / forgot OTP cleared; password_changed = false.
+    Does NOT set users.bidder_id — see B9.
+
+        pnpm seed:users
+
+
+B2. seed:clients — REQUIRED (prod)
+    Source: MSSQL tbl_Config_ClientMst.
+    RevenueRate → service_fee_value; service_fee_type = service_percentage
+    when rate is in 0–5 (exclusive of 0). Null or 0 RevenueRate →
+    service_fee_type = fixed_amount, service_fee_value = 0.
+    Rows with invalid RevenueRate (negative or > 5) are skipped.
+    Run AFTER seed:locations and seed:users.
+
+        pnpm seed:clients
+
+
+B3. seed:plant-locations — REQUIRED (prod)
+    Source: MSSQL tbl_Config_PlantLocation.
+    Seeds OrderNumber / OrderNumberDate → order_number / order_date.
+    Does NOT seed ServiceFeePer (fee is client-level only).
+    Run AFTER seed:locations, seed:users, seed:clients.
+    Auction plant locations live on auction_lots.plant_location_id (not auctions).
+
+        pnpm seed:plant-locations
+
+
+B4. seed:material-locations — REQUIRED (prod)
+    Source: MSSQL tbl_Config_MaterialLocation.
+    Run AFTER seed:locations, seed:users, seed:clients.
+
+        pnpm seed:material-locations
+
+
+B4a. seed:uom — REQUIRED before auction lots
+    Source: MSSQL tbl_Config_Item_UOM bare codes (PKg, PMT, …).
+    Seeds only currency-prefixed codes used on lots: Rs{code} + AED{code}
+    (e.g. RsPKg, AEDPKg). No bare PKg/PLt rows. Sequential ids 1..N.
+    Clears existing uom_id FKs then replaces `uoms` — re-run seed:auction-lots after.
+
+        pnpm seed:uom
+
+
+B4b. seed:items — REQUIRED (prod)
+    Source: MSSQL tbl_Config_ItemMst.
+    Run AFTER seed:users, seed:clients, and seed:uom. material_id and uom_id left NULL when unknown.
+
+        pnpm seed:items
+
+
+B4b2. seed:service-invoices — REQUIRED (prod) for service invoice admin
+    Source: MSSQL tbl_Data_ServiceInvoice.
+    Run AFTER seed:users, seed:clients, and seed:plant-locations.
+    Maps SRT 34/35/36 → service_percentage / fixed_amount / pmt.
+    Skips Mixed (SRT 37) and prints skipped ids as a WARN.
+    DB rows only — file uploads live in Phase R2 seed:service-invoice-documents.
+
+        pnpm seed:service-invoices
+
+
+B4b3. seed:service-invoice-payment-logs — REQUIRED (prod) for SI payment tracking
+    Source: MSSQL tbl_Data_ServiceInvoicePaymentDetails.
+    Run AFTER seed:service-invoices (and seed:users for created_by FKs).
+    Upserts into service_invoice_payment_logs, then backfills
+    service_invoices paid_amount / unpaid_amount / latest_payment_date / payment_status.
+
+        pnpm seed:service-invoice-payment-logs
+
+
+B4c. seed:benchmarks — REQUIRED (prod) for benchmark admin UI
+    Source: MSSQL tbl_Config_MeterialLocationMap + tbl_Data_BenchMarkMeterials.
+    Run AFTER seed:users. Populates benchmark_material_locations and benchmark_prices.
+    Requires MSSQL_SERVER / MSSQL_* env (same as other Phase B seeds).
+
+        pnpm seed:benchmarks
+
+    Combos whose location contains "$" (e.g. LME$) are seeded as USD. Their prices
+    are converted to INR with USD/INR rates from Frankfurter (ECB, no API key),
+    cached in fx_rates; INR prices get exchange_rate 1 and price_inr = price.
+
+B4d. db:backfill-benchmark-fx — ONE-TIME for databases seeded before currency support
+    Marks "$" locations as USD, loads USD/INR rates into fx_rates (one API call per
+    year), and fills currency / exchange_rate / price_inr / rate_date on every
+    benchmark_prices row. --delete-junk drops legacy rows dated before 1999-01-04
+    (the 1899-12-31 placeholders), which cannot be rated. Idempotent.
+
+        pnpm db:backfill-benchmark-fx --delete-junk
+
+
+B5. seed:validate-clients — VALIDATION STEP (not a data seed)
+    FK integrity gate after client-related seeds. Exits non-zero on failure.
+    Checks clients, plant_locations, material_locations FKs and prints counts.
+
+        pnpm seed:validate-clients
+
+
+B6. seed:bidders — REQUIRED (prod)
+    Source: MSSQL tbl_Config_BidderCompanyMst.
+    Also sets is_exempted from tbl_Config_BidderComp_NoNotification
+    (adds column via ALTER IF NOT EXISTS — no Drizzle migration).
+    Run AFTER seed:locations and seed:users.
+    Invalid PAN/GSTIN stored as NULL (check constraint).
+
+        pnpm seed:bidders
+
+
+B7. seed:bidder-registrations — OPTIONAL in dev, REQUIRED for prod registration history
+    Source: MSSQL tbl_Data_UserReg.
+    Run AFTER seed:bidders and seed:users.
+    No admin UI yet; preserves legacy signup rows in bidder_registrations.
+
+        pnpm seed:bidder-registrations
+
+
+B8. seed:user-clients — REQUIRED (prod)
+    Sources (merged into user_clients):
+      - MSSQL tbl_Config_ClientCompUser (client / client_limited portal logins)
+      - MSSQL tbl_Config_Client_ServiceProvider_Map (KAM / service-provider scope;
+        ServiceProvider column = UserId; IsActive treated as true)
+    Role discrimination stays on users.role_id (seed:users maps IsServiceProvider → kam).
+    KAM multi-client scope is NOT on users — it lives only in this junction.
+    On (userId, clientId) collision: earlier CreateDatetime → created_*;
+    later UpdateDatetime (else CreateDatetime) → updated_*; CompUser IsActive if present.
+    No db:push needed (schema unchanged). Idempotent upsert; does not delete stale pairs.
+    Run AFTER seed:users and seed:clients.
+    Required for client account-users (clientUsersService) and KAM company badges.
+
+        pnpm seed:user-clients
+
+
+B9. seed:user-bidders — REQUIRED (prod)
+    Source: MSSQL tbl_Config_BidderCompUser → updates users.bidder_id.
+    Run AFTER seed:users and seed:bidders.
+    NOT redundant with seed:users — bidder login ↔ company link is a separate
+    legacy table. Required for bidder detail Users tab (bidderUsersService).
+
+        pnpm seed:user-bidders
+
+
+B9a. seed:client-bidders — REQUIRED (prod) for standing client→bidder map
+    Source: MSSQL tbl_Config_Client_BidderComp_Map (active rows) → clients.bidders.
+    Also backfills clients.materials from items and bidders.materials from
+    auction_lot_bidder_maps when those tables are already populated.
+    Run AFTER seed:clients and seed:bidders. Re-run after seed:items /
+    seed:auction-lot-bidder-maps to refresh material backfills.
+    Idempotent set-union; does not remove existing IDs.
+
+        pnpm seed:client-bidders
+
+B9b. seed:backfill-standing-materials — OPTIONAL (Postgres-only)
+    Backfills clients.materials from items and bidders.materials from
+    auction_lot_bidder_maps. No MSSQL. Use on staging/prod when Profile
+    materials are empty for historical attaches/items. Idempotent set-union.
+
+        pnpm seed:backfill-standing-materials
+
+
+B10. seed:bidder-blocks — REQUIRED (prod)
+     Source: MSSQL tbl_Data_Client_BidderComp_BlockLog → bidder_block_logs.
+     Run AFTER seed:clients, seed:bidders, seed:users.
+
+         pnpm seed:bidder-blocks
+
+
+B10b. seed:bidder-exemptions — REQUIRED (prod)
+      Source: MSSQL tbl_Config_BidderComp_NoNotification → bidder_exemption_logs
+      (one is_exempted=true row per bidder; reason null). Also asserts
+      bidders.is_exempted = true for those ids.
+      Run AFTER seed:bidders, seed:users.
+
+          pnpm seed:bidder-exemptions
+
+
+B11. seed:bidder-document-types — REQUIRED (prod)
+     Source: MSSQL tbl_Config_DocumentType → bidder_document_types.
+     Run AFTER seed:users.
+
+         pnpm seed:bidder-document-types
+
+
+B12. seed:bidder-bank-accounts — REQUIRED (prod)
+     Source: MSSQL tbl_data_BidderBankDetails → bidder_bank_accounts.
+     Run AFTER seed:bidders. Legacy TripleDES decrypt → AES-256-GCM encrypt.
+     Requires SENSITIVE_DATA_ENCRYPTION_KEY.
+     Backfills cancelled_cheque_file_name from active bidder_document_logs type 4
+     (not MSSQL CancelCheckName). If Phase R2 seed:bidder-documents has not run yet,
+     no type-4 logs exist so the name stays NULL — seed:bidder-documents backfills
+     it later (it runs the same UPDATE), so run order is flexible.
+
+         pnpm seed:bidder-bank-accounts
+
+
+B13. seed:subscription-types — REQUIRED for the bidder subscription UI
+     Source: MSSQL tbl_Config_SubscriptionType → subscription_types.
+     Sets created_by = 1 when created_at is present (requires seed:users /
+     seed:bootstrap-user).
+     Brings the plan catalogue that fills the "Subscription type" select on
+     Bidder detail → Subscription → Add payment: Annual (id 1) and Lifetime
+     (id 2) are active; the inactive duplicate Annual (id 3) is filtered out by
+     /masters/subscription-types/options. Without this the select is empty.
+     Months = 0/NULL is stored as 1200 (Lifetime = 10 years).
+     Idempotent (ON CONFLICT (id) DO UPDATE).
+
+         pnpm seed:subscription-types
+
+
+B13a. seed:payment-types — REQUIRED for subscription + EMD payment mode selects
+     Source: MSSQL tbl_Config_PaymentType → payment_types.
+     Preserves MSSQL ids (1=ICICI 696, 2=ICICI 080, 4=Instamojo, …).
+     Idempotent (ON CONFLICT (id) DO UPDATE).
+
+         pnpm seed:payment-types
+
+
+B13b. seed:subscriptions — REQUIRED for admin /subscription ledger
+     Source: MSSQL tbl_Data_PaymentTransaction → subscriptions.
+     Run AFTER seed:bidders, seed:subscription-types, seed:payment-types,
+     seed:users. Preserves PaymentId as id. Skips orphan bidder/type rows.
+     Also maps invoice meta: InvoiceFormat → invoice_number, InvoiceCreatedDate →
+     invoice_date, InvoiceGeneratedBy / InvoiceUploadDateTime → generated_*,
+     invoice_status=generated when FileName or InvoiceFormat present.
+     Idempotent (ON CONFLICT (id) DO UPDATE); bumps identity sequence.
+     PDF files are seeded separately via seed:subscription-documents (Phase R2).
+
+         pnpm seed:subscriptions
+
+
+B13c. seed:subscription-payment-requests — Instamojo attempt history
+     Source: MSSQL tbl_Data_OnlinePaymentRequestLog → subscription_payment_requests.
+     Run AFTER seed:bidders, seed:subscription-types, seed:subscriptions.
+     Preserves id; synthesizes merchant_txn_id when blank; amount defaults to 0.
+     Idempotent (ON CONFLICT (id) DO UPDATE); bumps identity sequence.
+
+         pnpm seed:subscription-payment-requests
+
+
+=== Phase C — MSSQL → Postgres dependent ===
+
+
+C1. seed:auctions — REQUIRED for auctions admin UI (optional in minimal dev)
+    Source: MSSQL tbl_Data_Auction.
+    Run AFTER seed:clients, seed:users, seed:plant-locations.
+    Uses consolidated status model (draft/archived/published/closed).
+    Flag map from tbl_Data_Auction:
+      IsDeleted/IsArchived on unpublished → archived
+      IsDeleted/IsArchived after publish/close → closed
+      IsClosed / IsCanceled / IsApproved → closed
+      IsPublished → published
+      else → draft
+    Live/upcoming/future are datetime filters over published auctions (not statuses).
+    published → closed transitions are explicit only (seed IsClosed, future cron).
+
+        pnpm seed:auctions
+
+
+C1a. seed:auction-lots — REQUIRED for creation Lots tab (admin auction detail)
+    Source: MSSQL tbl_Data_AuctionLot + tbl_Data_Auction_Lot_Items.
+    Run AFTER seed:auctions, seed:uom, seed:plant-locations, seed:material-locations,
+    seed:items, and seed:benchmarks.
+    Resolves lot-item BenchmarkMaterialId + BenchmarkLocationId → names →
+    auction_lot_items.benchmark_material_location_id (null if combo missing; logs stats).
+    Also migrates MaterialLiftingDays, LoadingArrangement→loading_scope, GST_per, TCS_per,
+    and MaterialDesc → material_description.
+    Note: tbl_Data_AuctionLot has IsApproved but no ApprovalDate/ApprovedBy;
+    reviewed_at and reviewed_by are seeded NULL.
+
+        pnpm seed:auction-lots
+
+
+C1a0. seed:auction-bids — English bid ledger (auction_bids)
+    Source (MSSQL → Postgres auction_bids): tbl_Data_AuctionTransaction only
+      LotID→lot_id, AuctionId→auction_id, BidderCompId→bidder_id,
+      BidderUserId→user_id, BidAmount→amount,
+      IsProxyBid→is_proxy, ProxyBidAmount→proxy_amount,
+      CreateDatetime→created_at (no IP column → ip null)
+
+    Yankee (tbl_Data_YankeeTransaction) and sealed (tbl_Data_OnlineSealedBid)
+    are NOT seeded here — different auction products; auction_bids is the
+    English/forward live ledger. Sealed-bids go to auction_sealed_bids via
+    seed:auction-sealed-bids. Denormalized lot counts come from the live and
+    Yankee ledgers via seed:backfill-lot-bid-stats.
+
+    auction_bids.id is identity — legacy IDs are not preserved.
+    Soft-dedupe on (lot_id, bidder_id, amount, created_at).
+    Skips orphans (lot/bidder/user missing in Postgres).
+    Run AFTER seed:auction-lots, seed:bidders, seed:users.
+    Optional: SEED_RESET=1 truncates auction_bids before reload.
+    Prefer running BEFORE seed:backfill-lot-bid-stats.
+    Default page size is 100k (same as other large seeds; override with
+    SEED_BATCH_SIZE). Bulk UNNEST inserts; SEED_RESET skips soft-dedupe.
+
+        pnpm seed:auction-bids
+        SEED_RESET=1 pnpm seed:auction-bids
+        SEED_RESET=1 SEED_BATCH_SIZE=10000 pnpm seed:auction-bids
+
+
+C1a0b. seed:auction-bid-logs — attempt audit (auction_bid_logs)
+    Source (MSSQL → Postgres auction_bid_logs): tbl_Data_AuctionTransaction_Log
+      AuctionId→auction_id, LotID→lot_id, BidderCompId→bidder_id,
+      BidderUserId→user_id, BidAmount→amount,
+      IsProxyBid→is_proxy, ProxyBidAmount→proxy_amount,
+      IPAddress→ip, CreateDatetime→created_at
+    Always seeds is_accepted=NULL, reject_reason=NULL (legacy has no status).
+
+    auction_bid_logs.id is identity — legacy IDs are not preserved.
+    Soft-dedupe on (lot_id, bidder_id, amount, created_at, ip).
+    Skips orphans (lot/bidder/user missing in Postgres).
+    Run AFTER seed:auction-lots, seed:bidders, seed:users.
+    Optional: SEED_RESET=1 truncates auction_bid_logs before reload.
+    Default page size is 100k (override with SEED_BATCH_SIZE).
+
+        pnpm seed:auction-bid-logs
+        SEED_RESET=1 pnpm seed:auction-bid-logs
+        SEED_RESET=1 SEED_BATCH_SIZE=10000 pnpm seed:auction-bid-logs
+
+
+C1a0c. seed:auction-sealed-bids — sealed-bid window ledger (auction_sealed_bids)
+    Source (MSSQL → Postgres auction_sealed_bids): tbl_Data_OnlineSealedBid
+      AuctionId→auction_id, LotID→lot_id, ClientId→client_id,
+      BidderCompId→bidder_id, BidderUserId (fallback CreatedBy)→user_id,
+      DesiredAmount→amount, CreateDatetime→created_at (no IP column → ip null)
+
+    auction_sealed_bids.id is identity — legacy IDs are not preserved.
+    Soft-dedupe on (lot_id, bidder_id, amount, created_at).
+    Skips orphans (lot/bidder missing in Postgres); unknown users → user_id NULL.
+    Run AFTER seed:auctions, seed:auction-lots, seed:bidders, seed:users.
+    Optional: SEED_RESET=1 truncates auction_sealed_bids before reload.
+
+        pnpm seed:auction-sealed-bids
+        SEED_RESET=1 pnpm seed:auction-sealed-bids
+
+C1a1. seed:backfill-lot-bid-stats — denormalized bid stats + no-bid extension stop state
+    Source: MSSQL tbl_Data_AuctionTransaction (+ YankeeTransaction)
+    and tbl_Data_AuctionLotForCloseAutoTimeIncrement.
+    Run AFTER seed:auction-lots and seed:bidders.
+    Sets auction_lots.bid_count, bidder_count, bidder_ids (distinct bidders who bid),
+    and is_no_bid_extension (set false) / no_bid_extension_stopped_at for lots previously
+    excluded from no-bid extension.
+
+        pnpm seed:backfill-lot-bid-stats         # [--dry-run]
+
+
+C1a2. Lifting data (run after auction-lots)
+    Postgres-native lifting tables. Run dispositions first (no MSSQL required),
+    then client lifting history from MSSQL (needs auction lots / clients / users),
+    then backfills. Engagement logs are app-native and are not seeded.
+
+    MSSQL → Postgres table map:
+      tbl_Data_AuctionLiftingLot              → lifting_client_logs
+
+    Postgres-native (no MSSQL pull):
+      lifting_bidder_dispositions / lifting_client_dispositions
+        (hardcoded via seed:lifting-dispositions; client ids fixed 1–5)
+      lifting_engagement_logs
+        (starts empty; populated by the new app only)
+
+        pnpm seed:lifting-dispositions
+        pnpm seed:lifting-client-log
+        pnpm seed:backfill-auctionlot-approval   # [--dry-run]
+        pnpm seed:backfill-latest-lifted         # [--dry-run]
+
+
+C1b. seed:auction-lot-bidder-maps — bidder pool / lot mapping
+    Source: MSSQL tbl_Data_Auction_BidderComp_Map (IsEMDWithClient char(1), not EMDWithClient).
+    Large table (~20M rows). Keyset-batched on Id via batch-mssql.ts
+    (default 100k/page; override with SEED_BATCH_SIZE, max 1M).
+    Rule: any MSSQL seed expected to exceed the batch size must use
+    batch-mssql.ts — do not query() the full table into memory.
+    Run AFTER seed:auctions, seed:bidders, seed:auction-lots.
+
+        pnpm seed:auction-lot-bidder-maps
+        SEED_BATCH_SIZE=250000 pnpm seed:auction-lot-bidder-maps
+
+
+C1c. seed:auction-lot-emd — REQUIRED for creation EMD tab (lot display-order ranges)
+    Source: MSSQL tbl_Config_AuctionLotEMD.
+    Run AFTER seed:auctions.
+
+        pnpm seed:auction-lot-emd
+
+
+C1d. seed:auction-additional-fields — OPTIONAL; client SAP-sync fields (Adani/HMSL)
+    Source: MSSQL tbl_Data_AuctionAdditionalFields (legacy "Update Additional Field
+    (Adani)" uploads; active rows only). tbl_Data_Auction_Additional_Fields is
+    ignored (no rows).
+    Auto-creates client_additional_fields per (client, scope, label) as type text,
+    active. Auction No. → auctions.auction_number (ambiguous numbers
+    skipped); Lot No. → auction_lots.lot_number in that auction. A Lot No. of '0'
+    or blank becomes lot_id NULL (auction-level) — no row ever stores 0 as a lot.
+    Upserts auction_additional_field_values (later legacy rows win). Requires
+    db:push for the additional-fields tables. Run AFTER seed:auctions and
+    seed:auction-lots. Idempotent. Seeded fields stay type text: scope and type
+    are locked once a field has values.
+
+        pnpm seed:auction-additional-fields            # [--dry-run]
+
+
+C2. seed:emd — EMD ledger, refunds, forfeitures, settlement state (one transaction)
+    Source: MSSQL tbl_Data_BidderPassBook, tbl_Data_PayEMD, tbl_Data_EMDForFeited,
+    tbl_EMD_Book (deposit payment mode only).
+    TRUNCATEs emd_transactions / emd_refunds / emd_forfeitures / emd_transfers /
+    emd_range_holds / emd_winning_lot_releases / emd_settlement_jobs and reloads them:
+      - PayEMD -> emd_refunds (PayId kept; status from AdminStatus/AccountStatus/
+        TransactionId: UTR = paid, 'Cancel' = cancelled, rest open).
+      - Passbook -> emd_transactions (TrnId kept). DR with auction = blocked,
+        CR with auction = release_by_admin, CR without auction = deposit /
+        opening_balance / refund_cancelled. Zero rows skipped.
+      - Rows without an auction are matched (emd-legacy-match.ts):
+          refund debit -> refund_requested (open) / refund_processed (paid),
+            refund_id set (PayEMDId, UTR in remark, or bidder+amount near the request);
+          cancel credit -> refund_cancelled with refund_id;
+          EMDTransfer To/From pairs -> emd_transfers (approved) + transfer_out /
+            transfer_in with transfer_id;
+          other debits -> refund_processed (payout remark, no refund) or
+            correction_debit.
+      - Deposits: payment_type_id from tbl_EMD_Book (bidder + amount + UTR),
+        else ICICI 696 when a UTR exists. Passbook LotEmdId -> emd_range_id.
+      - Remaining blocks on closed auctions: winners get one range hold per won
+        EMD range, taken forfeits a forfeited hold; everyone else stays
+        blocked under a PAUSED legacy_cutover settlement job per auction.
+        Resume those from the admin settlement screen after Accounts sign-off.
+        Forfeitures whose block was already reversed in legacy are skipped and
+        listed in the report.
+      - ICICI 696 account number, VAN backfill, balance caches.
+    Run AFTER seed:auctions, seed:auction-lots, seed:bidders, seed:bidder-bank-accounts,
+    seed:users. Re-runnable (full reload).
+
+        pnpm seed:emd
+
+    seed.sh then runs seed:analyze (ANALYZE) so the verify queries below plan
+    against fresh stats; without it emd:verify-holds can hit the statement timeout.
+
+        pnpm seed:analyze
+
+
+C3. emd:verify-seed — reconcile seeded EMD against MSSQL
+    Per-bidder available balance must equal the legacy passbook net; blocked +
+    winning per (auction, bidder) must equal the legacy passbook net on that auction;
+    open refund totals must match. Exits 1 on any mismatch.
+    Also prints (information only) refund/transfer link coverage, deposits
+    without a payment mode, and legacy forfeitures that were not seeded.
+
+        pnpm emd:verify-seed
+
+C4. emd:verify-holds — read-only check of emd_range_holds (runs in seed.sh)
+    Flags range-less holds that can be split, money held with every lot already
+    released, lot releases hidden after a reopen, and holds that do not match the
+    ledger. Each finding names the repair script. seed:emd already builds one
+    hold per won EMD range, so a fresh load needs no repair script.
+    Which script to run when, and when to delete them:
+    docs/ops/emd-one-off-scripts.md
+
+        pnpm emd:verify-holds
+
+
+=== Phase R2 — file/document uploads to R2 ===
+(Requires MSSQL_SERVER / MSSQL_* AND R2 credentials)
+
+These seeds fetch legacy blobs/files and upload them to R2. They are split out
+from the DB phases (A–C) so DB-only runs need no R2 credentials and stay fast.
+Run them AFTER the DB phases (bidders/auctions + document-type rows must exist).
+
+  ./src/db/seed/seed.sh --files-only   # just this phase
+  ./src/db/seed/seed.sh                # DB phases + this phase (default)
+
+
+R1. seed:bidder-documents — REQUIRED (prod) when legacy TempBidderInfo files available
+    Unified MSSQL tbl_Data_BidderDocuments → TempBidderInfo fetch → R2 → bidder_document_logs.
+    Truncates bidder_document_logs; clears orphan files rows for bidders/*.
+    Writes file_name + s3_key on bidder_document_logs (no files table rows).
+    Append-only: every MSSQL RecId becomes one log row. Fetches legacy TempBidderInfo
+    file by MSSQL FileName; stores as `{prefix}{bidderId}_{epochMs}{ext}` using
+    MSSQL CreatedDate (UTC epoch milliseconds). R2 key bidders/{storageFileName}.
+    Backfills bank account cancelled cheque names from latest type-4 log entry
+    (same UPDATE as seed:bidder-bank-accounts, so it heals rows seeded earlier).
+
+        pnpm seed:bidder-documents [--report=/tmp/doc-files.csv] [--limit=50]
+            [--prescan-concurrency=20] [--no-prescan] [--no-skip-missing]
+    Pre-scan (default): local dir listing or parallel HTTP HEAD. Skips rows
+    whose legacy file is missing, then uploads the rest to R2.
+
+    Run AFTER Phase B (seed:bidders, seed:bidder-document-types, seed:bidder-bank-accounts).
+
+
+R2. seed:auction-documents — REQUIRED for creation Documents tab (catalogue + TnC)
+    Source: MSSQL tbl_Data_AuctionCatalog + tbl_Data_AuctionTnC (varbinary → R2).
+    Seeds auction_documents used by the admin creation Documents tab (catalogue + TnC).
+    Two-phase: validate blob (≤5MB, pdf/docx magic) + keep one per auction per document_type_id,
+    then putObject + objectExists before DB insert.
+    Writes file_name + s3_key on auction_documents (canonical basename; no files table).
+    Naming: {prefix}{clientId}_{auctionId}_{epoch}{ext} under auctions/catalogues/|tnc/.
+    UNIQUE(auction_id, document_type_id). Requires R2 credentials.
+    Run AFTER seed:auctions and seed:auction-document-types (Phase A/C).
+    Optional: --report=path.csv --limit=N
+
+        pnpm seed:auction-documents
+
+
+R3. seed:service-invoice-documents — REQUIRED (prod) when legacy SI files available
+    Source: MSSQL tbl_Data_ServiceInvoice file names + local legacy dirs → R2 →
+    service_invoice_documents (1:1 replace/upsert per invoice + type; stable R2 keys
+    without epochMs: annexure_xlsx_{id}_{clientId}.xlsx / annexure_pdf_… / invoice_pdf_…).
+    Run AFTER seed:service-invoices and seed:service-invoice-document-types (and db:push
+    for service_invoice_documents). Prefer a clean reseed after the logs→documents cutover.
+    Idempotent: skips (invoice, type) that already have an active row with s3_key.
+      1) Annexure xlsx from LEGACY_SERVICE_INVOICE_ANNEXURE_DIR (UploadedFiles/InvoiceAnnexure)
+         → document_type_id=1 (Annexure XLSX)
+      2) PDFs from LEGACY_SERVICE_INVOICE_PDF_DIR (PdfInvoiceFiles/ServiceInvoiceInfo)
+         via FileName split → type 2 Annexure PDF / type 3 Invoice PDF
+      3) Auto annexure fallback: regenerate .xlsx from lifting logs for Auto rows
+         still missing type-1 document
+
+        LEGACY_SERVICE_INVOICE_ANNEXURE_DIR=/path/to/UploadedFiles/InvoiceAnnexure \
+        LEGACY_SERVICE_INVOICE_PDF_DIR=/path/to/PdfInvoiceFiles/ServiceInvoiceInfo \
+        pnpm seed:service-invoice-documents
+
+
+R4. seed:subscription-documents — REQUIRED (prod) when legacy subscription invoice PDFs available
+    Source: MSSQL tbl_Data_PaymentTransaction.FileName + LEGACY_SUBSCRIPTION_INVOICE_PDF_DIR
+    (PdfInvoiceFiles/PaymentInfoReport) → R2 → subscription_documents
+    (document_type_id=1 Invoice PDF; stable key subscriptions/subscription-{id}-{bidderId}.pdf).
+    Run AFTER seed:subscriptions and seed:subscription-document-types.
+    Idempotent: skips (subscription, type) that already have an active row with s3_key.
+    Also patches invoice_status=generated when a PDF is uploaded and status was still requested.
+
+        LEGACY_SUBSCRIPTION_INVOICE_PDF_DIR=/path/to/PdfInvoiceFiles/PaymentInfoReport \
+        pnpm seed:subscription-documents
+
+
+Document storage note (after denorm / db:push):
+  Domain tables own file_name + s3_key. Prefer truncate + reseed for auction documents /
+  bidder docs / service invoice documents / subscription documents (stable keys overwrite on reseed).
+  Optional orphan cleanup (keeps misc users/* uploads):
+    DELETE FROM files WHERE s3_key LIKE 'auctions/%' OR s3_key LIKE 'bidders/%' OR s3_key LIKE 'clients/%';
+
+
+=== MSSQL maintenance (NOT in seed.sh) ===
+These scripts modify legacy MSSQL tables only — they do NOT seed Postgres.
+Postgres equivalents live under src/db/seed/ (seed:backfill-*, seed:lifting-*).
+
+    pnpm mssql:backfill-latest-lifted [--dry-run]
+    pnpm mssql:backfill-auctionlot-approval [--dry-run]
+    pnpm mssql:seed-lifting-dispositions
+
+
+Local / env cutover notes
+-------------------------
+
+RBAC order (always):
+
+        pnpm seed:roles
+        pnpm seed:permissions
+        pnpm seed:bootstrap-user # users.id=1 for audit FKs
+        pnpm seed:users          # re-run after roles
+
+
+Local dev shortcuts
+-------------------
+
+Minimal dev (no MSSQL): Phase A only (locations, roles, permissions,
+bootstrap-user, materials, sms-templates, client-document-types,
+auction-document-types, service-invoice-document-types).
+
+Skip in dev if not testing that feature:
+  - seed:bidder-registrations
+  - seed:auctions (+ auction-lots / auction-lot-bidder-maps / auction-lot-emd)
+  - seed:emd (+ emd:verify-seed)
+  - entire Phase B–C
+  - entire Phase R2 (file/document uploads) unless testing document flows;
+    use `./src/db/seed/seed.sh --db-only` to skip it
+
+Production cutover: run full Phase A → C + R2 via seed.sh (or split into
+`--db-only` first, then `--files-only` for the R2 uploads).

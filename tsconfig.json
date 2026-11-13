@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@auctionit/lib": ["./packages/lib/src/index.ts"],
+      "@auctionit/lib/gst-rates": ["./packages/lib/src/gst-rates.ts"],
+      "@auctionit/lib/loading-scope": ["./packages/lib/src/loading-scope.ts"],
+      "@auctionit/lib/validation": ["./packages/lib/src/validation/index.ts"],
+      "@auctionit/messages": ["./packages/messages/src/index.ts"],
+      "@auctionit/messages/clients": ["./packages/messages/src/clients/messages.ts"],
+      "@auctionit/messages/lifting-clients": ["./packages/messages/src/lifting-clients/messages.ts"],
+      "@auctionit/messages/lifting-bidders": ["./packages/messages/src/lifting-bidders/messages.ts"],
+      "@auctionit/xlsx-import": ["./packages/xlsx-import/src/index.ts"],
+      "@auctionit/xlsx-import/*": ["./packages/xlsx-import/src/*.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "drizzle.config.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/db/mssql-maintenance",
+    "src/**/*.test.ts"
+  ]
+}

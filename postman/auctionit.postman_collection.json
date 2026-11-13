@@ -1,0 +1,188 @@
+{
+  "info": {
+    "name": "AuctionIt API",
+    "description": "AuctionIt backend API. Update this collection when routes are added, renamed, or change shape.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "auctionit-api"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000",
+      "type": "string"
+    },
+    {
+      "key": "sessionToken",
+      "value": "",
+      "type": "string",
+      "description": "Populated automatically by the Login request's test script."
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{sessionToken}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "auth": { "type": "noauth" },
+            "description": "Liveness check. Always returns {\"ok\": true} when the API is up."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /auth/login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Capture sessionToken from the login response so subsequent requests authenticate.",
+                  "if (pm.response.code === 200) {",
+                  "  const body = pm.response.json();",
+                  "  if (body.sessionToken) {",
+                  "    pm.collectionVariables.set('sessionToken', body.sessionToken);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userLoginName\": \"SuperAdmin1\",\n  \"password\": \"replace-me\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            },
+            "auth": { "type": "noauth" },
+            "description": "Login by user_login_name. On success: sets a session cookie, returns the user record and a sessionToken (also used as Bearer for non-cookie clients). Passwords are stored as bcrypt; a legacy MD5 or bcrypt-wrapped MD5 row is rehashed to plain bcrypt transparently before the session is issued."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /auth/me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "me"]
+            },
+            "description": "Returns the currently authenticated user. Requires a valid session (cookie or Bearer token)."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /auth/logout",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 204) {",
+                  "  pm.collectionVariables.set('sessionToken', '');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "logout"]
+            },
+            "description": "Clears the server-side session and the session cookie. 204 on success."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "EMD",
+      "item": [
+        {
+          "name": "GET /emd/summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('has currentEmdBalance', () => pm.expect(b).to.have.property('currentEmdBalance'));",
+                  "pm.test('has totalBlockedInAuctions', () => pm.expect(b).to.have.property('totalBlockedInAuctions'));",
+                  "pm.test('has totalBlockedInRefundsPending', () => pm.expect(b).to.have.property('totalBlockedInRefundsPending'));",
+                  "pm.test('pendingRefundRequests is an array', () => pm.expect(b.pendingRefundRequests).to.be.an('array'));",
+                  "pm.test('blockedEmds is an array', () => pm.expect(b.blockedEmds).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/emd/summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["emd", "summary"]
+            },
+            "description": "EMD dashboard for the logged-in bidder. Reads the bidder company off the session, so log in first as a bidder user (the Login request stores the sessionToken). Returns: currentEmdBalance, totalBlockedInAuctions, totalBlockedInRefundsPending, pendingRefundRequests[] (payEmdId, regDate, remark, refBalance, isCancelRequest, isRejectBankDetails), and blockedEmds[] (date, client, auctionCode, amount). 401 if no/expired session; 403 if the user is not linked to a bidder company."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Clients",
+      "item": [
+        {
+          "name": "GET /clients",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/clients",
+              "host": ["{{baseUrl}}"],
+              "path": ["clients"]
+            },
+            "description": "List all clients (active and inactive). Admin only — requires is_admin=true OR is_admin_account=true on the authenticated user. 401 if no session, 403 if not admin."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

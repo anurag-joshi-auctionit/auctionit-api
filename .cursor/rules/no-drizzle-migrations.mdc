@@ -1,0 +1,10 @@
+---
+description: Never create Drizzle/SQL migration files; use db:push for schema changes
+alwaysApply: true
+---
+
+# Database schema changes
+
+- **Do NOT create migration `.sql` files** (under `apps/api/drizzle/` or elsewhere) unless the user explicitly asks for a migration.
+- Apply schema changes by updating Drizzle schema TypeScript under `apps/api/src/db/schema/` and running **`pnpm db:push`** (from `apps/api`).
+- Do not run `drizzle-kit generate` / create migration folders unless requested.

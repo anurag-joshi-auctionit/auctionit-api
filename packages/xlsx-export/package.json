@@ -1,0 +1,27 @@
+{
+  "name": "@auctionit/xlsx-export",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./build-rows-xlsx": "./src/build-rows-xlsx.ts",
+    "./filename": "./src/filename.ts",
+    "./ignore-number-as-text": "./src/ignore-number-as-text.ts",
+    "./inject-sheet-logo": "./src/inject-sheet-logo.ts",
+    "./report-header": "./src/report-header.ts",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}
