@@ -486,7 +486,11 @@ export function assertPublishedAtWindow(
 /**
  * On update, a changed publishedAt/auctionDate must also stay on or before
  * every existing active lot's configured start (auction day + lot start
- * time) — the same bound the Lot form enforces when a lot is saved. With no
+ * time) — the same bound the Lot form enforces when a lot is saved. This
+ * transitively also keeps publishedAt on or before every lot's end, since a
+ * lot's end is always after its own start (enforced when the lot is
+ * written), so the earliest end across lots is always later than the
+ * earliest start across lots — no separate end check is reachable. With no
  * active lot starts yet, there's nothing to check against.
  */
 async function assertPublishedAtAgainstExistingLots(
@@ -499,7 +503,7 @@ async function assertPublishedAtAgainstExistingLots(
   const earliestStart = earliestLotStart(lots, auctionDate);
   if (earliestStart.getTime() < new Date(publishedAt).getTime()) {
     const msg =
-      AuctionsValidationMessages.PUBLISHED_AT_MUST_BE_ON_OR_BEFORE_AUCTION_DATE;
+      AuctionsValidationMessages.PUBLISHED_AT_MUST_BE_ON_OR_BEFORE_EARLIEST_LOT_START;
     throw new AuctionValidationError(msg, { publishedAt: [msg] });
   }
 }

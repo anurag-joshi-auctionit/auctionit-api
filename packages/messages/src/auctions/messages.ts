@@ -18,6 +18,8 @@ export const AuctionsValidationMessages = {
     "Published at must be greater than the current time",
   PUBLISHED_AT_MUST_BE_ON_OR_BEFORE_AUCTION_DATE:
     "Published at must be on or before the auction date",
+  PUBLISHED_AT_MUST_BE_ON_OR_BEFORE_EARLIEST_LOT_START:
+    "Published at must be on or before the earliest lot's start time",
   LOT_NUMBER_REQUIRED: "Lot number is required",
   DISPLAY_ORDER_REQUIRED: "Display order is required",
   DISPLAY_ORDER_MUST_BE_POSITIVE: "Display order must be greater than zero",

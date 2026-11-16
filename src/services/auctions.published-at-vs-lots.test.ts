@@ -56,6 +56,7 @@ function futureAuctionDate(daysAhead: number): string {
 
 const auctionDate = futureAuctionDate(10);
 const lotStartTime = "16:00:00";
+const lotEndTime = "17:00:00";
 // The lot's actual start instant (auctionDate + 16:00 IST) — deterministic
 // regardless of what time of day the suite happens to run.
 const lotStartInstant = parseLotDateTimeOnAuctionDate(lotStartTime, auctionDate)!;
@@ -75,7 +76,7 @@ describe("auctionsService.update publishedAt vs existing lot starts", () => {
 
   it("rejects a publishedAt after an existing active lot's start time", async () => {
     pgLotTimesMock.mockResolvedValue([
-      { lotStartTime, lotEndTime: "17:00:00" },
+      { lotStartTime, lotEndTime },
     ]);
     selectQueue.push([
       {
@@ -95,10 +96,10 @@ describe("auctionsService.update publishedAt vs existing lot starts", () => {
     ).rejects.toMatchObject({
       name: "AuctionValidationError",
       message:
-        AuctionsValidationMessages.PUBLISHED_AT_MUST_BE_ON_OR_BEFORE_AUCTION_DATE,
+        AuctionsValidationMessages.PUBLISHED_AT_MUST_BE_ON_OR_BEFORE_EARLIEST_LOT_START,
       fieldErrors: {
         publishedAt: [
-          AuctionsValidationMessages.PUBLISHED_AT_MUST_BE_ON_OR_BEFORE_AUCTION_DATE,
+          AuctionsValidationMessages.PUBLISHED_AT_MUST_BE_ON_OR_BEFORE_EARLIEST_LOT_START,
         ],
       },
     });
@@ -107,7 +108,7 @@ describe("auctionsService.update publishedAt vs existing lot starts", () => {
 
   it("accepts a publishedAt on or before every existing active lot's start time", async () => {
     pgLotTimesMock.mockResolvedValue([
-      { lotStartTime, lotEndTime: "17:00:00" },
+      { lotStartTime, lotEndTime },
     ]);
     selectQueue.push([
       {

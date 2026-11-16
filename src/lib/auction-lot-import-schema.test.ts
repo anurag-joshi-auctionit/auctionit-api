@@ -1,8 +1,9 @@
 import { AuctionsValidationMessages } from "@auctionit/messages/auctions";
+import { parseLotDateTimeOnAuctionDate } from "@auctionit/lib/lot-schedule";
 import { describe, expect, it } from "vitest";
 import { parseAuctionLotImportSheetRows } from "./auction-lot-import-parse.js";
 import { auctionLotImportRowSchema, refineBidIncrementVsPrice, refineBidLimitVsStartPrice } from "./auction-lot-import-schema.js";
-import { auctionLotWriteSchema } from "./auction-lot-write-schema.js";
+import { auctionLotWriteSchema, createAuctionLotWriteSchema } from "./auction-lot-write-schema.js";
 
 describe("auctionLotWriteSchema", () => {
   const base = {
@@ -203,6 +204,78 @@ describe("auctionLotWriteSchema", () => {
         AuctionsValidationMessages.QUANTITY_MUST_BE_NON_NEGATIVE,
       ]);
     }
+  });
+});
+
+describe("createAuctionLotWriteSchema with publishedAt (manual lot create/update)", () => {
+  function futureAuctionDate(daysAhead: number): string {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + daysAhead);
+    d.setUTCHours(0, 0, 0, 0);
+    return d.toISOString();
+  }
+
+  const auctionDate = futureAuctionDate(10);
+  const lotStartTime = "16:00:00";
+  const lotEndTime = "17:00:00";
+  const lotStartInstant = parseLotDateTimeOnAuctionDate(lotStartTime, auctionDate)!;
+  const publishedAtBeforeLotStart = new Date(
+    lotStartInstant.getTime() - 60 * 60 * 1000,
+  ).toISOString();
+  const publishedAtAfterLotStart = new Date(
+    lotStartInstant.getTime() + 60 * 60 * 1000,
+  ).toISOString();
+
+  const row = {
+    lotNumber: "L1",
+    materialLiftingDays: 7,
+    plantLocationId: 1,
+    materialLocationId: 2,
+    gstPercentage: 18,
+    tcsPercentage: 1,
+    startBidPrice: 100,
+    bidLimit: 200,
+    bidIncrement: 10,
+    lotStartTime,
+    lotEndTime,
+    loadingScope: "Buyer",
+    displayOrder: 1.5,
+    remark: "ok",
+    itemId: 9,
+    quantity: 12.5,
+    uomCode: "MT",
+    benchmarkMaterialLocationId: 3,
+    materialName: "Scrap",
+  };
+
+  it("rejects a lot start time before the auction's Published At", () => {
+    const parsed = createAuctionLotWriteSchema(
+      "Forward",
+      auctionDate,
+      publishedAtAfterLotStart,
+    ).safeParse(row);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.flatten().fieldErrors.lotStartTime).toEqual([
+        AuctionsValidationMessages.LOT_START_TIME_BEFORE_PUBLISHED_AT,
+      ]);
+    }
+  });
+
+  it("accepts a lot start time on or after the auction's Published At", () => {
+    const parsed = createAuctionLotWriteSchema(
+      "Forward",
+      auctionDate,
+      publishedAtBeforeLotStart,
+    ).safeParse(row);
+    expect(parsed.success).toBe(true);
+  });
+
+  it("skips the Published At check when publishedAt is not given", () => {
+    const parsed = createAuctionLotWriteSchema("Forward", auctionDate).safeParse(
+      row,
+    );
+    expect(parsed.success).toBe(true);
   });
 });
 

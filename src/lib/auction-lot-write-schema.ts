@@ -100,6 +100,7 @@ export function lotTimeOfDayZod(requiredMessage: string) {
 export function createAuctionLotWriteSchema(
   auctionType?: string | null,
   auctionDate?: string | null,
+  publishedAt?: string | null,
 ) {
   const label = bidStepLabel(auctionType);
   return z
@@ -204,6 +205,8 @@ export function createAuctionLotWriteSchema(
           row.lotStartTime,
           row.lotEndTime,
           auctionDate,
+          undefined,
+          publishedAt,
         );
         if (scheduleErrors) {
           for (const [field, messages] of Object.entries(scheduleErrors)) {

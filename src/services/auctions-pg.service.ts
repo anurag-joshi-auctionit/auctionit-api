@@ -3424,14 +3424,23 @@ export async function pgGetAuctionType(
   return rows[0]?.auctionType ?? null;
 }
 
-/** Type + auction date for lot write Zod (schedule rules need the calendar day). */
+/**
+ * Type + auction date + publishedAt for lot write Zod (schedule rules need
+ * the calendar day and, for the lot-start-vs-publishedAt check, the
+ * auction's Published At instant).
+ */
 export async function pgGetAuctionLotWriteContext(
   auctionId: number,
-): Promise<{ auctionType: string | null; auctionDate: string | null } | null> {
+): Promise<{
+  auctionType: string | null;
+  auctionDate: string | null;
+  publishedAt: string | null;
+} | null> {
   const rows = await db
     .select({
       auctionType: auctions.auctionType,
       auctionDate: auctions.auctionDate,
+      publishedAt: auctions.publishedAt,
     })
     .from(auctions)
     .where(eq(auctions.id, auctionId))
@@ -3441,6 +3450,7 @@ export async function pgGetAuctionLotWriteContext(
   return {
     auctionType: row.auctionType,
     auctionDate: row.auctionDate,
+    publishedAt: row.publishedAt,
   };
 }
 
