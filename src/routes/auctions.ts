@@ -820,6 +820,7 @@ router.patch("/:id/lots/:lotId", async (req, res, next) => {
     const userId = req.user?.id ?? 1;
     await auctionsService.patchLot(id, lotId, body.data, userId);
     res.json({ ok: true });
+    void broadcastSnapshot(id);
   } catch (e) {
     handleAuctionError(e, res, next);
   }

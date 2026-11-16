@@ -1856,6 +1856,7 @@ export class AuctionsService {
     try {
       await pgPatchLot(auctionId, lotId, body, userId);
     } catch (err) {
+      if (err instanceof AuctionValidationError) throw err;
       if (err instanceof Error) {
         throw new AuctionValidationError(err.message);
       }

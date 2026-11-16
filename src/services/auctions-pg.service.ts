@@ -1844,6 +1844,7 @@ export async function pgPatchLot(
       uomId: auctionLots.uomId,
       startTime: auctionLots.startTime,
       bidCount: auctionLots.bidCount,
+      startBidPrice: auctionLots.startBidPrice,
     })
     .from(auctionLots)
     .where(
@@ -1865,6 +1866,20 @@ export async function pgPatchLot(
       {
         lotStartTime: [
           AuctionsValidationMessages.LOT_START_TIME_NOT_EDITABLE_WITH_BIDS,
+        ],
+      },
+    );
+  }
+
+  if (
+    existingLot.bidCount > 0 &&
+    String(body.startBidPrice) !== existingLot.startBidPrice
+  ) {
+    throw new AuctionValidationError(
+      AuctionsValidationMessages.START_BID_NOT_EDITABLE_WITH_BIDS,
+      {
+        startBidPrice: [
+          AuctionsValidationMessages.START_BID_NOT_EDITABLE_WITH_BIDS,
         ],
       },
     );
@@ -1938,6 +1953,7 @@ export async function pgPatchLot(
       remark: body.remark.trim(),
       quantity: String(body.quantity),
       uomId,
+      liveRev: sql`live_rev + 1`,
       updatedAt: now,
       updatedBy: userId,
     })
