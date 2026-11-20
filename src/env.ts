@@ -8,7 +8,13 @@ const boolFromEnv = z
   .transform((v) => (typeof v === "boolean" ? v : v.toLowerCase() === "true"));
 
 const schema = z.object({
-  DATABASE_URL: z.string().url(),
+  DATABASE_URL: z
+    .string()
+    .min(1)
+    .refine(
+      (v) => v.startsWith("postgres://") || v.startsWith("postgresql://"),
+      { message: "DATABASE_URL must start with postgres:// or postgresql://" }
+    ),
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z
     .enum(["development", "local", "staging", "production", "test"])
