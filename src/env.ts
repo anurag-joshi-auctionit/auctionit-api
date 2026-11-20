@@ -16,6 +16,15 @@ const schema = z.object({
       { message: "DATABASE_URL must start with postgres:// or postgresql://" }
     ),
   PORT: z.coerce.number().default(4000),
+  CORS_ORIGINS: z
+    .string()
+    .default("")
+    .transform((s) =>
+      s
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean),
+    ),
   NODE_ENV: z
     .enum(["development", "local", "staging", "production", "test"])
     .default("development"),

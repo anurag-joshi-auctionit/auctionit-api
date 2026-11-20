@@ -59,6 +59,9 @@ app.use(
 
 if (env.NODE_ENV === "development" || env.NODE_ENV === "local") {
   app.use(cors({ origin: true, credentials: true }));
+} else if (env.CORS_ORIGINS.length > 0) {
+  const allowed = new Set(env.CORS_ORIGINS);
+  app.use(cors({ origin: (o, cb) => cb(null, !o || allowed.has(o)), credentials: true }));
 }
 app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
