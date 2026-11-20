@@ -7,6 +7,9 @@ import clientDashboardRouter from "./client-dashboard.js";
 import bidderDashboardRouter from "./bidder-dashboard.js";
 import authRouter from "./auth.js";
 import auctionsRouter from "./auctions.js";
+import questionTemplatesRouter from "./question-templates.js";
+import auctionRaStagesRouter from "./auction-ra-stages.js";
+import bidderRaStagesRouter from "./bidder-ra-stages.js";
 import filesRouter from "./files.js";
 import smsRouter from "./sms.js";
 import emailRouter from "./email.js";
@@ -62,6 +65,21 @@ export const routeMounts: RouteMount[] = [
   { prefix: "/client/dashboard", router: clientDashboardRouter, tag: "Client portal – Dashboard" },
   { prefix: "/bidder/dashboard", router: bidderDashboardRouter, tag: "Bidder portal – Dashboard" },
   { prefix: "/auctions", router: auctionsRouter, tag: "Auctions" },
+  {
+    prefix: "/auctions",
+    router: auctionRaStagesRouter,
+    tag: "Auctions – RA Stages",
+  },
+  {
+    prefix: "/question-templates",
+    router: questionTemplatesRouter,
+    tag: "Question templates",
+  },
+  {
+    prefix: "/bidder-ra-stages",
+    router: bidderRaStagesRouter,
+    tag: "Bidder portal – RA Stages",
+  },
   { prefix: "/files", router: filesRouter, tag: "Files" },
   { prefix: "/sms", router: smsRouter, tag: "SMS" },
   { prefix: "/email", router: emailRouter, tag: "Email" },

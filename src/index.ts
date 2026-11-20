@@ -29,6 +29,8 @@ import {
   ADDITIONAL_FIELDS_IMPORT_TICK_MS,
 } from "./services/additional-fields-import-jobs.service.js";
 import { enqueueConcludedNotifications } from "./services/auction-notification.service.js";
+import { runRaStageLifecycleSync } from "./services/auction-ra-stages/lifecycle-tick.service.js";
+import { RA_STAGE_LIFECYCLE_TICK_MS } from "./lib/auction-ra-stages/constants.js";
 import { getPoolMetrics } from "./db/index.js";
 import { bootstrapPermissionCatalog } from "./services/roles.service.js";
 import { routeMounts } from "./routes/mounts.js";
@@ -162,6 +164,12 @@ void createSocketServer(httpServer).then(async () => {
           for (const auctionId of result.closedAuctionIds) {
             console.log(`auction ${auctionId} auto-closed (bidding ended)`);
             void broadcastSnapshot(auctionId);
+            void runRaStageLifecycleSync({ auctionId }).catch((err) =>
+              console.error(
+                `RA Stages sync failed for auto-closed auction ${auctionId}`,
+                err,
+              ),
+            );
           }
           if (result.closedAuctionIds.length > 0) {
             void enqueueConcludedNotifications(result.closedAuctionIds)
@@ -199,6 +207,38 @@ void createSocketServer(httpServer).then(async () => {
           settling = false;
         });
     }, EMD_SETTLEMENT_TICK_MS);
+  }
+
+  // RA Stages have no manual open/close/reopen action: this tick is the only
+  // periodic sweep that keeps every stage's status in sync with its own
+  // startsAt/endsAt AND its parent auction's status (draft/archived forces
+  // draft, closed forces closed, published drives the normal progression).
+  // The same sync also runs synchronously, scoped to one auction, whenever
+  // that auction's own status changes — see auctions.service.ts and
+  // auction-close.service.ts — so this periodic sweep is just the safety net.
+  {
+    let tickingRaStages = false;
+    setInterval(() => {
+      if (tickingRaStages) return;
+      tickingRaStages = true;
+      void runRaStageLifecycleSync()
+        .then((result) => {
+          if (
+            result.resetToDraft > 0 ||
+            result.closedByAuction > 0 ||
+            result.published > 0 ||
+            result.closed > 0
+          ) {
+            console.log(
+              `RA Stages tick: resetToDraft=${result.resetToDraft} closedByAuction=${result.closedByAuction} published=${result.published} closed=${result.closed}`,
+            );
+          }
+        })
+        .catch((err) => console.error("RA Stages lifecycle tick failed", err))
+        .finally(() => {
+          tickingRaStages = false;
+        });
+    }, RA_STAGE_LIFECYCLE_TICK_MS);
   }
 
   {

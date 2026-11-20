@@ -33,6 +33,8 @@ export const EMAIL_SOURCE_TYPE_AUCTION_CATALOGUE_NOTIFICATION =
 export const EMAIL_SOURCE_TYPE_EMD_FORFEITURE = "emd_forfeiture" as const;
 export const EMAIL_SOURCE_TYPE_BANK_CHANGE_REQUEST =
   "bank_change_request" as const;
+export const EMAIL_SOURCE_TYPE_AUCTION_RA_STAGE_INVITE =
+  "auction_ra_stage_invite" as const;
 
 /** R2 reference persisted on the log row — bytes are fetched at send time. */
 export type EmailAttachmentRef = {

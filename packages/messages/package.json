@@ -107,6 +107,18 @@
     "./live": {
       "types": "./src/live/messages.ts",
       "default": "./src/live/messages.ts"
+    },
+    "./auction-ra-stages": {
+      "types": "./src/auction-ra-stages/messages.ts",
+      "default": "./src/auction-ra-stages/messages.ts"
+    },
+    "./question-templates": {
+      "types": "./src/question-templates/messages.ts",
+      "default": "./src/question-templates/messages.ts"
+    },
+    "./bidder-ra-stages": {
+      "types": "./src/bidder-ra-stages/messages.ts",
+      "default": "./src/bidder-ra-stages/messages.ts"
     }
   },
   "scripts": {

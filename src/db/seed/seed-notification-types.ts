@@ -12,6 +12,7 @@ import {
   NOTIFICATION_TYPE_AUCTION_CONCLUDED,
   NOTIFICATION_TYPE_SI_PAYMENT_REMINDER_BEFORE_DUE,
   NOTIFICATION_TYPE_SI_PAYMENT_REMINDER_AFTER_DUE,
+  NOTIFICATION_TYPE_AUCTION_RA_STAGE_INVITE,
 } from "../schema/notification-types.js";
 
 const MODULE_TYPES: Array<{ id: number; description: string }> = [
@@ -58,6 +59,10 @@ const MODULE_TYPES: Array<{ id: number; description: string }> = [
   {
     id: NOTIFICATION_TYPE_EMD_FORFEITED,
     description: "EMD — Forfeiture Notice",
+  },
+  {
+    id: NOTIFICATION_TYPE_AUCTION_RA_STAGE_INVITE,
+    description: "RA Stage — Bidder Invitation",
   },
 ];
 

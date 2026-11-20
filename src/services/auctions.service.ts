@@ -106,6 +106,7 @@ import { EmdError } from "../lib/emd/errors.js";
 import { unmappedSelectedLotIds } from "../lib/auctions/emd-range-validation.js";
 import { parseLotBidderMapImportXlsxBuffer } from "../lib/parse-lot-bidder-map-import-buffer.js";
 import { auctionAdditionalFieldsService } from "./auction-additional-fields.service.js";
+import { runRaStageLifecycleSync } from "./auction-ra-stages/lifecycle-tick.service.js";
 import {
   dedupeLotBidderMapImportRows,
   parseIsEmdWithClient,
@@ -1471,6 +1472,7 @@ export class AuctionsService {
       .where(eq(auctions.id, auctionId))
       .returning({ id: auctions.id });
     if (result.length === 0) throw new AuctionNotFoundError();
+    await runRaStageLifecycleSync({ auctionId });
   }
 
   /** Explicit "Move to Draft" — the only way a published auction is unpublished. */
@@ -1523,6 +1525,7 @@ export class AuctionsService {
       .where(and(eq(auctions.id, auctionId), eq(auctions.status, "published")))
       .returning({ id: auctions.id });
     if (result.length === 0) throw new AuctionNotFoundError();
+    await runRaStageLifecycleSync({ auctionId });
   }
 
   async archive(auctionId: number, userId: number) {
@@ -1562,6 +1565,7 @@ export class AuctionsService {
       .where(eq(auctions.id, auctionId))
       .returning({ id: auctions.id });
     if (result.length === 0) throw new AuctionNotFoundError();
+    await runRaStageLifecycleSync({ auctionId });
   }
 
   async restore(auctionId: number, userId: number) {
@@ -1589,6 +1593,7 @@ export class AuctionsService {
       .where(eq(auctions.id, auctionId))
       .returning({ id: auctions.id });
     if (result.length === 0) throw new AuctionNotFoundError();
+    await runRaStageLifecycleSync({ auctionId });
   }
 
   async listLots(auctionId: number, opts: AuctionLotsListParams = {}) {
