@@ -261,12 +261,12 @@ export class ApiClient {
 
   async me(): Promise<SessionUser | null> {
     try {
-      const data = await this.request<{ user: SessionUser }>(
+      const data = await this.request<{ user: SessionUser } | null>(
         "/auth/me",
         { method: "GET" },
         { skipUnauthorized: true },
       );
-      return data.user;
+      return data?.user ?? null;
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return null;
       throw err;
