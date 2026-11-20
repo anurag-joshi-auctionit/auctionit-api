@@ -16,6 +16,7 @@ const schema = z.object({
       { message: "DATABASE_URL must start with postgres:// or postgresql://" }
     ),
   PORT: z.coerce.number().default(4000),
+  API_PREFIX: z.string().default("/api/v1"),
   CORS_ORIGINS: z
     .string()
     .default("")

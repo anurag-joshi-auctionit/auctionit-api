@@ -76,9 +76,11 @@ app.use(
   express.static(join(dirname(fileURLToPath(import.meta.url)), "../public")),
 );
 
+const apiRouter = express.Router();
 for (const { prefix, router } of routeMounts) {
-  app.use(prefix, router);
+  apiRouter.use(prefix, router);
 }
+app.use(env.API_PREFIX, apiRouter);
 
 app.use(
   (
