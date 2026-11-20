@@ -8,25 +8,9 @@ const boolFromEnv = z
 const schema = z.object({
   DATABASE_URL: z.string().url(),
   PORT: z.coerce.number().default(4000),
-  CORS_ORIGINS: z
-    .string()
-    .default(
-      [
-        "http://localhost:3001",
-        "http://localhost:3002",
-        "http://localhost:4321",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:3002",
-        "http://127.0.0.1:4321",
-      ].join(","),
-    )
-    .transform((s) =>
-      s
-        .split(",")
-        .map((origin) => origin.trim())
-        .filter(Boolean),
-    ),
-  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  NODE_ENV: z
+    .enum(["development", "local", "staging", "production", "test"])
+    .default("development"),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .optional(),
@@ -201,7 +185,7 @@ const schema = z.object({
    */
   SEED_OWNER_EMAILS: z
     .string()
-    .default("anurag.joshi@auctionit.in,kumar.abhinav@auctionit.in")
+    .default("anurag.joshi@auctionit.in")
     .transform((s) =>
       s
         .split(",")

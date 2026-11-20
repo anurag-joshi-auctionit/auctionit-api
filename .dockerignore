@@ -1,0 +1,11 @@
+node_modules
+packages/*/node_modules
+dist
+.env
+.env.*
+drizzle
+*.log
+postman
+docs
+memory
+.github

@@ -197,8 +197,11 @@ export async function createSocketServer(
       ? env.SOCKET_TRANSPORTS
       : (["polling", "websocket"] as ("polling" | "websocket")[]);
 
+  const isLocal =
+    env.NODE_ENV === "development" || env.NODE_ENV === "local";
+
   io = new Server(httpServer, {
-    cors: { origin: env.CORS_ORIGINS, credentials: true },
+    cors: isLocal ? { origin: "*" } : undefined,
     transports,
     pingInterval: 25_000,
     pingTimeout: 20_000,
