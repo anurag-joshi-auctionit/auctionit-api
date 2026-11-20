@@ -58,7 +58,7 @@ app.use(
 );
 
 if (env.NODE_ENV === "development" || env.NODE_ENV === "local") {
-  app.use(cors({ origin: "*" }));
+  app.use(cors({ origin: true, credentials: true }));
 }
 app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
