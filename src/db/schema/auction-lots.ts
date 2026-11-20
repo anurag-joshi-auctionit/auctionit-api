@@ -64,7 +64,7 @@ export const auctionLots = pgTable(
     latestLiftedQty: numeric("latest_lifted_qty", { precision: 18, scale: 3 })
       .notNull()
       .default("0"),
-    winnerUserId: integer("winner_user_id").references(() => users.id),
+    winnerUserId: integer("winner_user_id"),
     winnerBidderId: integer("winner_bidder_id").references(() => bidders.id),
     winningAmount: numeric("winning_amount", { precision: 18, scale: 2 }),
     // Live anti-sniping: when a bid extends a lot, the effective end time is
