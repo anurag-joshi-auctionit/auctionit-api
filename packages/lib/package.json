@@ -9,30 +9,78 @@
     "./auth": "./src/auth.tsx",
     "./guards": "./src/guards.tsx",
     "./types": "./src/types.ts",
-    "./currency": "./src/currency.ts",
-  "./date": "./src/date.ts",
-  "./parse-picker-input": "./src/parse-picker-input.ts",
-  "./gst-rates": "./src/gst-rates.ts",
-    "./loading-scope": "./src/loading-scope.ts",
-    "./time-of-day": "./src/time-of-day.ts",
-    "./lot-schedule": "./src/lot-schedule.ts",
     "./download-blob": "./src/download-blob.ts",
     "./download-authenticated-blob": "./src/download-authenticated-blob.ts",
-    "./validation": "./src/validation/index.ts",
-    "./authz": "./src/authz.ts",
-    "./fuzzy-match": "./src/fuzzy-match.ts",
+    "./currency": {
+      "types": "./src/currency.ts",
+      "default": "./dist/currency.js"
+    },
+    "./date": {
+      "types": "./src/date.ts",
+      "default": "./dist/date.js"
+    },
+    "./parse-picker-input": {
+      "types": "./src/parse-picker-input.ts",
+      "default": "./dist/parse-picker-input.js"
+    },
+    "./gst-rates": {
+      "types": "./src/gst-rates.ts",
+      "default": "./dist/gst-rates.js"
+    },
+    "./loading-scope": {
+      "types": "./src/loading-scope.ts",
+      "default": "./dist/loading-scope.js"
+    },
+    "./time-of-day": {
+      "types": "./src/time-of-day.ts",
+      "default": "./dist/time-of-day.js"
+    },
+    "./lot-schedule": {
+      "types": "./src/lot-schedule.ts",
+      "default": "./dist/lot-schedule.js"
+    },
+    "./validation": {
+      "types": "./src/validation/index.ts",
+      "default": "./dist/validation/index.js"
+    },
+    "./authz": {
+      "types": "./src/authz.ts",
+      "default": "./dist/authz.js"
+    },
+    "./fuzzy-match": {
+      "types": "./src/fuzzy-match.ts",
+      "default": "./dist/fuzzy-match.js"
+    },
     "./live-auction": "./src/live-auction.ts",
     "./live-transport": "./src/live-transport.ts",
-    "./live-bid-bounds": "./src/live-bid-bounds.ts",
-    "./bid-direction": "./src/bid-direction.ts",
-    "./bid-limit-vs-start": "./src/bid-limit-vs-start.ts",
-    "./bid-increment-vs-price": "./src/bid-increment-vs-price.ts",
-    "./winner-rank": "./src/winner-rank.ts",
-    "./auction-modes": "./src/auction-modes.ts"
+    "./live-bid-bounds": {
+      "types": "./src/live-bid-bounds.ts",
+      "default": "./dist/live-bid-bounds.js"
+    },
+    "./bid-direction": {
+      "types": "./src/bid-direction.ts",
+      "default": "./dist/bid-direction.js"
+    },
+    "./bid-limit-vs-start": {
+      "types": "./src/bid-limit-vs-start.ts",
+      "default": "./dist/bid-limit-vs-start.js"
+    },
+    "./bid-increment-vs-price": {
+      "types": "./src/bid-increment-vs-price.ts",
+      "default": "./dist/bid-increment-vs-price.js"
+    },
+    "./winner-rank": {
+      "types": "./src/winner-rank.ts",
+      "default": "./dist/winner-rank.js"
+    },
+    "./auction-modes": {
+      "types": "./src/auction-modes.ts",
+      "default": "./dist/auction-modes.js"
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@auctionit/authz": "workspace:*",

@@ -20,6 +20,9 @@ RUN pnpm install --frozen-lockfile
 # Copy source
 COPY . .
 
+# Compile workspace packages first (their dist/ is needed at runtime)
+RUN pnpm -r --filter './packages/*' build
+
 # Compile TypeScript → dist/
 RUN pnpm build
 
@@ -38,8 +41,15 @@ COPY packages/messages/package.json     packages/messages/
 COPY packages/xlsx-export/package.json  packages/xlsx-export/
 COPY packages/xlsx-import/package.json  packages/xlsx-import/
 
-# Install production deps only
+# Install production deps only (creates workspace symlinks packages/* → node_modules/@auctionit/*)
 RUN pnpm install --frozen-lockfile --prod
+
+# Copy compiled workspace package outputs so the symlinks resolve to JS at runtime
+COPY --from=builder /app/packages/authz/dist      packages/authz/dist
+COPY --from=builder /app/packages/messages/dist   packages/messages/dist
+COPY --from=builder /app/packages/lib/dist        packages/lib/dist
+COPY --from=builder /app/packages/xlsx-export/dist packages/xlsx-export/dist
+COPY --from=builder /app/packages/xlsx-import/dist packages/xlsx-import/dist
 
 # Copy compiled output from builder
 COPY --from=builder /app/dist ./dist

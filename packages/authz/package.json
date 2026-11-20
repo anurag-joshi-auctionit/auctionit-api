@@ -4,14 +4,30 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./permission-keys": "./src/permission-keys.ts",
-    "./catalog": "./src/catalog.ts",
-    "./can": "./src/can.ts",
-    "./navigation-filter": "./src/navigation-filter.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./permission-keys": {
+      "types": "./src/permission-keys.ts",
+      "default": "./dist/permission-keys.js"
+    },
+    "./catalog": {
+      "types": "./src/catalog.ts",
+      "default": "./dist/catalog.js"
+    },
+    "./can": {
+      "types": "./src/can.ts",
+      "default": "./dist/can.js"
+    },
+    "./navigation-filter": {
+      "types": "./src/navigation-filter.ts",
+      "default": "./dist/navigation-filter.js"
+    }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

@@ -4,125 +4,123 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
-    },
+    ".": "./src/index.ts",
     "./lifting-bidders": {
       "types": "./src/lifting-bidders/messages.ts",
-      "default": "./src/lifting-bidders/messages.ts"
+      "default": "./dist/lifting-bidders/messages.js"
     },
     "./lifting-clients": {
       "types": "./src/lifting-clients/messages.ts",
-      "default": "./src/lifting-clients/messages.ts"
+      "default": "./dist/lifting-clients/messages.js"
     },
     "./common": {
       "types": "./src/common/messages.ts",
-      "default": "./src/common/messages.ts"
+      "default": "./dist/common/messages.js"
     },
     "./clients": {
       "types": "./src/clients/messages.ts",
-      "default": "./src/clients/messages.ts"
+      "default": "./dist/clients/messages.js"
     },
     "./bidders": {
       "types": "./src/bidders/messages.ts",
-      "default": "./src/bidders/messages.ts"
+      "default": "./dist/bidders/messages.js"
     },
     "./users": {
       "types": "./src/users/messages.ts",
-      "default": "./src/users/messages.ts"
+      "default": "./dist/users/messages.js"
     },
     "./items": {
       "types": "./src/items/messages.ts",
-      "default": "./src/items/messages.ts"
+      "default": "./dist/items/messages.js"
     },
     "./benchmarks": {
       "types": "./src/benchmarks/messages.ts",
-      "default": "./src/benchmarks/messages.ts"
+      "default": "./dist/benchmarks/messages.js"
     },
     "./auctions": {
       "types": "./src/auctions/messages.ts",
-      "default": "./src/auctions/messages.ts"
+      "default": "./dist/auctions/messages.js"
     },
     "./service-invoices": {
       "types": "./src/service-invoices/messages.ts",
-      "default": "./src/service-invoices/messages.ts"
+      "default": "./dist/service-invoices/messages.js"
     },
     "./subscriptions": {
       "types": "./src/subscriptions/messages.ts",
-      "default": "./src/subscriptions/messages.ts"
+      "default": "./dist/subscriptions/messages.js"
     },
     "./roles": {
       "types": "./src/roles/messages.ts",
-      "default": "./src/roles/messages.ts"
+      "default": "./dist/roles/messages.js"
     },
     "./permissions": {
       "types": "./src/permissions/messages.ts",
-      "default": "./src/permissions/messages.ts"
+      "default": "./dist/permissions/messages.js"
     },
     "./auth": {
       "types": "./src/auth/messages.ts",
-      "default": "./src/auth/messages.ts"
+      "default": "./dist/auth/messages.js"
     },
     "./authz": {
       "types": "./src/authz/messages.ts",
-      "default": "./src/authz/messages.ts"
+      "default": "./dist/authz/messages.js"
     },
     "./files": {
       "types": "./src/files/messages.ts",
-      "default": "./src/files/messages.ts"
+      "default": "./dist/files/messages.js"
     },
     "./email": {
       "types": "./src/email/messages.ts",
-      "default": "./src/email/messages.ts"
+      "default": "./dist/email/messages.js"
     },
     "./emd": {
       "types": "./src/emd/messages.ts",
-      "default": "./src/emd/messages.ts"
+      "default": "./dist/emd/messages.js"
     },
     "./reports": {
       "types": "./src/reports/messages.ts",
-      "default": "./src/reports/messages.ts"
+      "default": "./dist/reports/messages.js"
     },
     "./client-dashboard": {
       "types": "./src/client-dashboard/messages.ts",
-      "default": "./src/client-dashboard/messages.ts"
+      "default": "./dist/client-dashboard/messages.js"
     },
     "./bidder-dashboard": {
       "types": "./src/bidder-dashboard/messages.ts",
-      "default": "./src/bidder-dashboard/messages.ts"
+      "default": "./dist/bidder-dashboard/messages.js"
     },
     "./admin-dashboard": {
       "types": "./src/admin-dashboard/messages.ts",
-      "default": "./src/admin-dashboard/messages.ts"
+      "default": "./dist/admin-dashboard/messages.js"
     },
     "./masters": {
       "types": "./src/masters/messages.ts",
-      "default": "./src/masters/messages.ts"
+      "default": "./dist/masters/messages.js"
     },
     "./sms": {
       "types": "./src/sms/messages.ts",
-      "default": "./src/sms/messages.ts"
+      "default": "./dist/sms/messages.js"
     },
     "./live": {
       "types": "./src/live/messages.ts",
-      "default": "./src/live/messages.ts"
+      "default": "./dist/live/messages.js"
     },
     "./auction-ra-stages": {
       "types": "./src/auction-ra-stages/messages.ts",
-      "default": "./src/auction-ra-stages/messages.ts"
+      "default": "./dist/auction-ra-stages/messages.js"
     },
     "./question-templates": {
       "types": "./src/question-templates/messages.ts",
-      "default": "./src/question-templates/messages.ts"
+      "default": "./dist/question-templates/messages.js"
     },
     "./bidder-ra-stages": {
       "types": "./src/bidder-ra-stages/messages.ts",
-      "default": "./src/bidder-ra-stages/messages.ts"
+      "default": "./dist/bidder-ra-stages/messages.js"
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

@@ -4,15 +4,34 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./coerce": "./src/coerce.ts",
-    "./date": "./src/date.ts",
-    "./headers": "./src/headers.ts",
-    "./read-xlsx": "./src/read-xlsx.ts",
-    "./types": "./src/types.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./coerce": {
+      "types": "./src/coerce.ts",
+      "default": "./dist/coerce.js"
+    },
+    "./date": {
+      "types": "./src/date.ts",
+      "default": "./dist/date.js"
+    },
+    "./headers": {
+      "types": "./src/headers.ts",
+      "default": "./dist/headers.js"
+    },
+    "./read-xlsx": {
+      "types": "./src/read-xlsx.ts",
+      "default": "./dist/read-xlsx.js"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./dist/types.js"
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run"
   },
   "dependencies": {

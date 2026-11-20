@@ -4,16 +4,38 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./build-rows-xlsx": "./src/build-rows-xlsx.ts",
-    "./filename": "./src/filename.ts",
-    "./ignore-number-as-text": "./src/ignore-number-as-text.ts",
-    "./inject-sheet-logo": "./src/inject-sheet-logo.ts",
-    "./report-header": "./src/report-header.ts",
-    "./types": "./src/types.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./build-rows-xlsx": {
+      "types": "./src/build-rows-xlsx.ts",
+      "default": "./dist/build-rows-xlsx.js"
+    },
+    "./filename": {
+      "types": "./src/filename.ts",
+      "default": "./dist/filename.js"
+    },
+    "./ignore-number-as-text": {
+      "types": "./src/ignore-number-as-text.ts",
+      "default": "./dist/ignore-number-as-text.js"
+    },
+    "./inject-sheet-logo": {
+      "types": "./src/inject-sheet-logo.ts",
+      "default": "./dist/inject-sheet-logo.js"
+    },
+    "./report-header": {
+      "types": "./src/report-header.ts",
+      "default": "./dist/report-header.js"
+    },
+    "./types": {
+      "types": "./src/types.ts",
+      "default": "./dist/types.js"
+    }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run"
   },
   "dependencies": {
