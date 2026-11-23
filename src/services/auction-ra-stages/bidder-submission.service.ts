@@ -1,15 +1,16 @@
 import { BidderRaStagesErrorMessages, BidderRaStagesValidationMessages } from "@auctionit/messages/bidder-ra-stages";
 import { formatUtcNow } from "@auctionit/lib/date";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
+import { auctionRaStageInvitedBidders } from "../../db/schema/auction-ra-stage-invitations.js";
 import { auctionRaStageQuestions, auctionRaStages } from "../../db/schema/auction-ra-stages.js";
 import {
   auctionRaStageAnswers,
   auctionRaStageResponses,
 } from "../../db/schema/auction-ra-stage-responses.js";
-import type { AuctionRaStageKey } from "../../db/schema/question-templates.js";
+import { AUCTION_RA_STAGE_KEYS, type AuctionRaStageKey } from "../../db/schema/question-templates.js";
 import { filesService } from "../files.service.js";
-import { questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
+import { earliestEnabledStageKey, questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
 
 export type BidderStageInvitationDto = {
@@ -60,10 +61,65 @@ async function requireResponseRow(
     )
     .limit(1);
 
-  if (!row) {
+  if (row) return row;
+
+  // No response row yet — check if the bidder is actively invited to this auction.
+  // A response row may be missing for bidders invited before the row-creation
+  // logic was added; create it on first access.
+  const [invitation] = await db
+    .select({ entryStage: auctionRaStageInvitedBidders.entryStage })
+    .from(auctionRaStageInvitedBidders)
+    .where(
+      and(
+        eq(auctionRaStageInvitedBidders.auctionId, auctionId),
+        eq(auctionRaStageInvitedBidders.bidderId, bidderId),
+        eq(auctionRaStageInvitedBidders.isActive, true),
+      ),
+    )
+    .limit(1);
+
+  if (!invitation) {
     throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.NOT_INVITED);
   }
-  return row;
+
+  // Reject access to stages before the bidder's entry point.
+  const entryIndex = invitation.entryStage ? AUCTION_RA_STAGE_KEYS.indexOf(invitation.entryStage) : 0;
+  if (AUCTION_RA_STAGE_KEYS.indexOf(stageKey) < entryIndex) {
+    throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.NOT_INVITED);
+  }
+
+  const [stageRow] = await db
+    .select({
+      stageId: auctionRaStages.id,
+      stageStatus: auctionRaStages.status,
+      startsAt: auctionRaStages.startsAt,
+      endsAt: auctionRaStages.endsAt,
+    })
+    .from(auctionRaStages)
+    .where(and(eq(auctionRaStages.auctionId, auctionId), eq(auctionRaStages.stageKey, stageKey)))
+    .limit(1);
+
+  if (!stageRow) {
+    throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.NOT_INVITED);
+  }
+
+  const now = formatUtcNow();
+  const [created] = await db
+    .insert(auctionRaStageResponses)
+    .values({ auctionRaStageId: stageRow.stageId, bidderId, status: "invited", createdAt: now })
+    .onConflictDoNothing()
+    .returning({
+      responseId: auctionRaStageResponses.id,
+      responseStatus: auctionRaStageResponses.status,
+      isShortlisted: auctionRaStageResponses.isShortlisted,
+      rejectionReason: auctionRaStageResponses.rejectionReason,
+    });
+
+  if (!created) {
+    throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.NOT_INVITED);
+  }
+
+  return { ...created, ...stageRow };
 }
 
 export const bidderRaStageSubmissionService = {
@@ -82,12 +138,41 @@ export const bidderRaStageSubmissionService = {
       .innerJoin(auctionRaStages, eq(auctionRaStages.id, auctionRaStageResponses.auctionRaStageId))
       .where(and(eq(auctionRaStages.auctionId, auctionId), eq(auctionRaStageResponses.bidderId, bidderId)));
 
-    return rows.map((r) => ({
-      stageKey: r.stageKey,
-      status: r.status,
-      isShortlisted: r.isShortlisted ?? null,
-      rejectionReason: r.rejectionReason ?? null,
-    }));
+    if (rows.length > 0) {
+      return rows.map((r) => ({
+        stageKey: r.stageKey,
+        status: r.status,
+        isShortlisted: r.isShortlisted ?? null,
+        rejectionReason: r.rejectionReason ?? null,
+      }));
+    }
+
+    // Fallback: bidder was invited via the invitation table but has no response
+    // rows yet (e.g. invited before row-creation was wired up). Synthesise the
+    // entry-stage invitation so the bidder can see the stage in the app.
+    const [invitation] = await db
+      .select({ entryStage: auctionRaStageInvitedBidders.entryStage })
+      .from(auctionRaStageInvitedBidders)
+      .where(
+        and(
+          eq(auctionRaStageInvitedBidders.auctionId, auctionId),
+          eq(auctionRaStageInvitedBidders.bidderId, bidderId),
+          eq(auctionRaStageInvitedBidders.isActive, true),
+        ),
+      )
+      .limit(1);
+
+    if (!invitation) return [];
+
+    const stageRows = await db
+      .select({ stageKey: auctionRaStages.stageKey, enabled: auctionRaStages.enabled })
+      .from(auctionRaStages)
+      .where(eq(auctionRaStages.auctionId, auctionId));
+
+    const entryStageKey = invitation.entryStage ?? earliestEnabledStageKey(stageRows);
+    if (!entryStageKey) return [];
+
+    return [{ stageKey: entryStageKey, status: "invited", isShortlisted: null, rejectionReason: null }];
   },
 
   async getMyStage(
