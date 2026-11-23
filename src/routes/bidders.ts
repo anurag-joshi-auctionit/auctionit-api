@@ -586,7 +586,8 @@ router.put(
         res.status(400).json({ error: message });
         return;
       }
-      next(e);
+      const errMessage = e instanceof Error ? e.message : String(e);
+      res.status(500).json({ error: errMessage || "Upload failed" });
     }
   },
 );
