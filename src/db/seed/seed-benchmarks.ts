@@ -13,6 +13,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 import { asString } from "./resolve-location-id.js";
 
@@ -46,42 +47,35 @@ INNER JOIN tbl_Config_BenchMarkLocation l ON bp.LocationId = l.LocationId
 WHERE bp.IsActive = 1
 `;
 
-const MATERIAL_UPSERT_SQL = `
+// Bulk unnest upserts for catalog tables — returns id + lower(name) for map building
+const MATERIAL_BULK_SQL = `
 INSERT INTO benchmark_materials (name, is_active, created_at, created_by, updated_at, updated_by)
-VALUES ($1, $2, $3, $4, $5, $6)
+SELECT unnest($1::text[]), unnest($2::bool[]), unnest($3::text[])::timestamptz, unnest($4::int[]), unnest($5::text[])::timestamptz, unnest($6::int[])
 ON CONFLICT (lower(name)) DO UPDATE SET
   is_active = EXCLUDED.is_active OR benchmark_materials.is_active,
   updated_at = EXCLUDED.updated_at,
   updated_by = EXCLUDED.updated_by
-RETURNING id
+RETURNING id, lower(name) AS name_lower
 `;
 
-const LOCATION_UPSERT_SQL = `
+const LOCATION_BULK_SQL = `
 INSERT INTO benchmark_locations (name, is_active, created_at, created_by, updated_at, updated_by)
-VALUES ($1, $2, $3, $4, $5, $6)
+SELECT unnest($1::text[]), unnest($2::bool[]), unnest($3::text[])::timestamptz, unnest($4::int[]), unnest($5::text[])::timestamptz, unnest($6::int[])
 ON CONFLICT (lower(name)) DO UPDATE SET
   is_active = EXCLUDED.is_active OR benchmark_locations.is_active,
   updated_at = EXCLUDED.updated_at,
   updated_by = EXCLUDED.updated_by
-RETURNING id
+RETURNING id, lower(name) AS name_lower
 `;
 
-const COMBO_UPSERT_SQL = `
-INSERT INTO benchmark_material_locations (
-  material_id, location_id, is_active, created_at, created_by, updated_at, updated_by, currency
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT (material_id, location_id) DO UPDATE SET
-  is_active = EXCLUDED.is_active,
-  updated_at = EXCLUDED.updated_at,
-  updated_by = EXCLUDED.updated_by
-RETURNING id
-`;
-
-const PRICE_UPSERT_SQL = `
+// $3 passed twice (price + price_inr) makes 8 params per row
+const PRICE_HEAD_SQL = `
 INSERT INTO benchmark_prices (
   benchmark_material_location_id, benchmark_date, price, price_inr,
   created_at, created_by, updated_at, updated_by
-) VALUES ($1, $2, $3, $3, $4, $5, $6, $7)
+)`;
+
+const PRICE_TAIL_SQL = `
 ON CONFLICT (benchmark_material_location_id, benchmark_date) DO UPDATE SET
   price = EXCLUDED.price,
   price_inr = EXCLUDED.price_inr,
@@ -123,89 +117,42 @@ async function loadUserIds(pool: pg.Pool): Promise<Set<number>> {
   return new Set(res.rows.map((r) => r.id));
 }
 
-async function upsertMaterial(
+/** Bulk-upsert materials and return a lower(name) → id map. */
+async function bulkUpsertMaterials(
   client: pg.PoolClient,
-  name: string,
-  isActive: boolean,
-  createdAt: string,
-  createdBy: number,
-  updatedAt: string | null,
-  updatedBy: number | null,
-): Promise<number> {
-  const result = await client.query<{ id: number }>(MATERIAL_UPSERT_SQL, [
-    name,
-    isActive,
-    createdAt,
-    createdBy,
-    updatedAt,
-    updatedBy,
+  rows: { name: string; isActive: boolean; createdAt: string; createdBy: number; updatedAt: string | null; updatedBy: number | null }[],
+): Promise<Map<string, number>> {
+  if (rows.length === 0) return new Map();
+  const res = await client.query<{ id: number; name_lower: string }>(MATERIAL_BULK_SQL, [
+    rows.map((r) => r.name),
+    rows.map((r) => r.isActive),
+    rows.map((r) => r.createdAt),
+    rows.map((r) => r.createdBy),
+    rows.map((r) => r.updatedAt),
+    rows.map((r) => r.updatedBy),
   ]);
-  return result.rows[0]!.id;
+  const map = new Map<string, number>();
+  for (const row of res.rows) map.set(row.name_lower, row.id);
+  return map;
 }
 
-async function upsertLocation(
+/** Bulk-upsert locations and return a lower(name) → id map. */
+async function bulkUpsertLocations(
   client: pg.PoolClient,
-  name: string,
-  isActive: boolean,
-  createdAt: string,
-  createdBy: number,
-  updatedAt: string | null,
-  updatedBy: number | null,
-): Promise<number> {
-  const result = await client.query<{ id: number }>(LOCATION_UPSERT_SQL, [
-    name,
-    isActive,
-    createdAt,
-    createdBy,
-    updatedAt,
-    updatedBy,
+  rows: { name: string; isActive: boolean; createdAt: string; createdBy: number; updatedAt: string | null; updatedBy: number | null }[],
+): Promise<Map<string, number>> {
+  if (rows.length === 0) return new Map();
+  const res = await client.query<{ id: number; name_lower: string }>(LOCATION_BULK_SQL, [
+    rows.map((r) => r.name),
+    rows.map((r) => r.isActive),
+    rows.map((r) => r.createdAt),
+    rows.map((r) => r.createdBy),
+    rows.map((r) => r.updatedAt),
+    rows.map((r) => r.updatedBy),
   ]);
-  return result.rows[0]!.id;
-}
-
-async function upsertCombo(
-  client: pg.PoolClient,
-  row: {
-    material: string;
-    location: string;
-    isActive: boolean;
-    createdAt: string;
-    createdBy: number;
-    updatedAt: string | null;
-    updatedBy: number | null;
-  },
-): Promise<number> {
-  const material = row.material.trim();
-  const location = row.location.trim();
-  const materialId = await upsertMaterial(
-    client,
-    material,
-    row.isActive,
-    row.createdAt,
-    row.createdBy,
-    row.updatedAt,
-    row.updatedBy,
-  );
-  const locationId = await upsertLocation(
-    client,
-    location,
-    row.isActive,
-    row.createdAt,
-    row.createdBy,
-    row.updatedAt,
-    row.updatedBy,
-  );
-  const result = await client.query<{ id: number }>(COMBO_UPSERT_SQL, [
-    materialId,
-    locationId,
-    row.isActive,
-    row.createdAt,
-    row.createdBy,
-    row.updatedAt,
-    row.updatedBy,
-    currencyForLocation(location),
-  ]);
-  return result.rows[0]!.id;
+  const map = new Map<string, number>();
+  for (const row of res.rows) map.set(row.name_lower, row.id);
+  return map;
 }
 
 async function rateSeededPrices() {
@@ -255,86 +202,124 @@ async function seedFromMssql(pgPool: pg.Pool) {
 
     const userIds = await loadUserIds(pgPool);
     userIds.add(SEED_DEFAULT_USER_ID);
+    const now = new Date().toISOString();
+
     const client = await pgPool.connect();
     let combosUpserted = 0;
-    let pricesUpserted = 0;
     let skippedPricesMissingMaterialOrLocation = 0;
     let skippedPricesMissingDate = 0;
 
     try {
       await client.query("BEGIN");
 
+      // ── 1. Collect all distinct materials and locations from both sources ──
+      type CatalogEntry = { name: string; isActive: boolean; createdAt: string; createdBy: number; updatedAt: string | null; updatedBy: number | null };
+      const materialMap = new Map<string, CatalogEntry>();
+      const locationMap = new Map<string, CatalogEntry>();
+
+      const addEntry = (map: Map<string, CatalogEntry>, name: string, entry: CatalogEntry) => {
+        const key = name.trim().toLowerCase();
+        if (!map.has(key)) map.set(key, { ...entry, name: name.trim() });
+      };
+
+      for (const row of comboResult.recordset) {
+        const material = asString(row.material);
+        const location = asString(row.location);
+        if (!material || !location) continue;
+        const isActive = Boolean(row.isActive);
+        const createdBy = resolveAuditUserId(row.createdBy, userIds);
+        const entry: CatalogEntry = { name: material, isActive, createdAt: row.createdAt, createdBy, updatedAt: row.updatedAt, updatedBy: resolveAuditUserIdIfTimestamp(row.updatedAt, row.updatedBy, userIds) };
+        addEntry(materialMap, material, entry);
+        addEntry(locationMap, location, { ...entry, name: location });
+      }
+
+      for (const row of priceResult.recordset) {
+        const material = asString(row.material);
+        const location = asString(row.location);
+        if (!material || !location) continue;
+        const createdBy = resolveAuditUserId(row.createdBy, userIds);
+        const entry: CatalogEntry = { name: material, isActive: true, createdAt: row.createdAt ?? now, createdBy, updatedAt: row.updatedAt, updatedBy: resolveAuditUserIdIfTimestamp(row.updatedAt, row.updatedBy, userIds) };
+        addEntry(materialMap, material, entry);
+        addEntry(locationMap, location, { ...entry, name: location });
+      }
+
+      // ── 2. Bulk upsert materials and locations, get name→id maps ──
+      const materialIdMap = await bulkUpsertMaterials(client, [...materialMap.values()]);
+      const locationIdMap = await bulkUpsertLocations(client, [...locationMap.values()]);
+
+      // ── 3. Upsert combos using resolved IDs, build comboKey→id map ──
       for (const row of comboResult.recordset) {
         const material = asString(row.material);
         const location = asString(row.location);
         if (!material || !location) continue;
 
-        await upsertCombo(client, {
-          material,
-          location,
-          isActive: Boolean(row.isActive),
-          createdAt: row.createdAt,
-          createdBy: resolveAuditUserId(row.createdBy, userIds),
-          updatedAt: row.updatedAt,
-          updatedBy: resolveAuditUserIdIfTimestamp(
-            row.updatedAt,
-            row.updatedBy,
-            userIds,
-          ),
-        });
+        const materialId = materialIdMap.get(material.trim().toLowerCase());
+        const locationId = locationIdMap.get(location.trim().toLowerCase());
+        if (materialId == null || locationId == null) continue;
+
+        await client.query(
+          `INSERT INTO benchmark_material_locations (material_id, location_id, is_active, created_at, created_by, updated_at, updated_by, currency)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (material_id, location_id) DO UPDATE SET
+             is_active = EXCLUDED.is_active,
+             updated_at = EXCLUDED.updated_at,
+             updated_by = EXCLUDED.updated_by`,
+          [
+            materialId, locationId, Boolean(row.isActive), row.createdAt,
+            resolveAuditUserId(row.createdBy, userIds), row.updatedAt,
+            resolveAuditUserIdIfTimestamp(row.updatedAt, row.updatedBy, userIds),
+            currencyForLocation(location),
+          ],
+        );
         combosUpserted++;
       }
 
+      // Reload combo map after all combos are upserted
       const comboIdMap = await loadComboIdMap(client);
-      const now = new Date().toISOString();
+
+      // ── 4. Build price rows in-memory, then bulk upsert ──
+      const priceRows: unknown[][] = [];
 
       for (const row of priceResult.recordset) {
         const material = asString(row.material);
         const location = asString(row.location);
-        if (!material || !location) {
-          skippedPricesMissingMaterialOrLocation++;
-          continue;
-        }
-        if (!row.benchmarkDate) {
-          skippedPricesMissingDate++;
-          continue;
-        }
+        if (!material || !location) { skippedPricesMissingMaterialOrLocation++; continue; }
+        if (!row.benchmarkDate) { skippedPricesMissingDate++; continue; }
 
         const comboKey = `${material.trim()}|${location.trim()}`;
         let comboId = comboIdMap.get(comboKey);
+
         if (comboId == null) {
-          comboId = await upsertCombo(client, {
-            material,
-            location,
-            isActive: true,
-            createdAt: row.createdAt ?? now,
-            createdBy: resolveAuditUserId(row.createdBy, userIds),
-            updatedAt: row.updatedAt,
-            updatedBy: resolveAuditUserIdIfTimestamp(
-              row.updatedAt,
-              row.updatedBy,
-              userIds,
-            ),
-          });
+          // Edge case: price references a combo not in the original combos list
+          const materialId = materialIdMap.get(material.trim().toLowerCase());
+          const locationId = locationIdMap.get(location.trim().toLowerCase());
+          if (materialId == null || locationId == null) { skippedPricesMissingMaterialOrLocation++; continue; }
+          const res = await client.query<{ id: number }>(
+            `INSERT INTO benchmark_material_locations (material_id, location_id, is_active, created_at, created_by, updated_at, updated_by, currency)
+             VALUES ($1, $2, true, $3, $4, $5, $6, $7)
+             ON CONFLICT (material_id, location_id) DO UPDATE SET updated_at = EXCLUDED.updated_at
+             RETURNING id`,
+            [materialId, locationId, row.createdAt ?? now, resolveAuditUserId(row.createdBy, userIds), row.updatedAt, resolveAuditUserIdIfTimestamp(row.updatedAt, row.updatedBy, userIds), currencyForLocation(location)],
+          );
+          comboId = res.rows[0]!.id;
           comboIdMap.set(comboKey, comboId);
         }
 
         const priceUpdatedAt = row.updatedAt ?? row.createdAt ?? now;
-        await client.query(PRICE_UPSERT_SQL, [
+        const priceVal = Number(row.price).toFixed(2);
+        priceRows.push([
           comboId,
           row.benchmarkDate,
-          Number(row.price).toFixed(2),
+          priceVal,
+          priceVal,  // price_inr (same value; rated by rateSeededPrices() after)
           row.createdAt ?? now,
           resolveAuditUserId(row.createdBy, userIds),
           priceUpdatedAt,
-          resolveAuditUserIdIfTimestamp(
-            priceUpdatedAt,
-            row.updatedBy,
-            userIds,
-          ),
+          resolveAuditUserIdIfTimestamp(priceUpdatedAt, row.updatedBy, userIds),
         ]);
-        pricesUpserted++;
       }
+
+      await upsertBatched(client, "benchmark_prices", PRICE_HEAD_SQL, PRICE_TAIL_SQL, priceRows);
 
       await client.query("COMMIT");
     } catch (err) {
@@ -345,7 +330,7 @@ async function seedFromMssql(pgPool: pg.Pool) {
     }
 
     console.log(
-      `Seeded ${combosUpserted} benchmark combos and ${pricesUpserted} benchmark prices ` +
+      `Seeded ${combosUpserted} benchmark combos and ${priceResult.recordset.length - skippedPricesMissingMaterialOrLocation - skippedPricesMissingDate} benchmark prices ` +
         `(${skippedPricesMissingMaterialOrLocation} skipped: missing material/location, ` +
         `${skippedPricesMissingDate} skipped: missing benchmark date) ` +
         `in ${Date.now() - started}ms.`,

@@ -5,6 +5,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 
 const SOURCE_SQL = `
@@ -21,14 +22,13 @@ SELECT
 FROM tbl_Data_Client_BidderComp_BlockLog
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO bidder_block_logs (
   id, client_id, bidder_id, is_blocked, reason,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3, $4, $5,
-  $6, $7, $8, $9
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   client_id = EXCLUDED.client_id,
   bidder_id = EXCLUDED.bidder_id,
@@ -77,52 +77,39 @@ async function main() {
     const validUserIds = new Set(userRows.rows.map((r) => r.id));
     validUserIds.add(SEED_DEFAULT_USER_ID);
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Build rows in-memory (9 params each)
+    const rows: unknown[][] = [];
     let skippedMissingClient = 0;
     let skippedMissingBidder = 0;
     let defaultedCreatedBy = 0;
     let defaultedUpdatedBy = 0;
 
+    for (const r of result.recordset) {
+      if (!validClientIds.has(r.clientId)) { skippedMissingClient++; continue; }
+      if (!validBidderIds.has(r.bidderId)) { skippedMissingBidder++; continue; }
+
+      const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
+      if (r.createdBy !== createdBy) defaultedCreatedBy++;
+      const updatedBy = resolveAuditUserIdIfTimestamp(r.updatedAt, r.updatedBy, validUserIds);
+      if (r.updatedAt != null && (r.updatedBy == null || r.updatedBy !== updatedBy)) defaultedUpdatedBy++;
+
+      rows.push([
+        r.id,
+        r.clientId,
+        r.bidderId,
+        Boolean(r.isBlocked),
+        r.reason,
+        r.createdAt ?? new Date().toISOString(),
+        createdBy,
+        r.updatedAt,
+        updatedBy,
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        if (!validClientIds.has(r.clientId)) {
-          skippedMissingClient++;
-          continue;
-        }
-        if (!validBidderIds.has(r.bidderId)) {
-          skippedMissingBidder++;
-          continue;
-        }
-
-        const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
-        if (r.createdBy !== createdBy) defaultedCreatedBy++;
-        const updatedBy = resolveAuditUserIdIfTimestamp(
-          r.updatedAt,
-          r.updatedBy,
-          validUserIds,
-        );
-        if (
-          r.updatedAt != null &&
-          (r.updatedBy == null || r.updatedBy !== updatedBy)
-        ) {
-          defaultedUpdatedBy++;
-        }
-
-        await client.query(UPSERT_SQL, [
-          r.id,
-          r.clientId,
-          r.bidderId,
-          Boolean(r.isBlocked),
-          r.reason,
-          r.createdAt ?? new Date().toISOString(),
-          createdBy,
-          r.updatedAt,
-          updatedBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "bidder_block_logs", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -132,7 +119,7 @@ async function main() {
     }
 
     console.log(
-      `Upserted ${upserted} rows into bidder_block_logs ` +
+      `Upserted ${rows.length} rows into bidder_block_logs ` +
         `(${skippedMissingClient} skipped: client not in Postgres, ` +
         `${skippedMissingBidder} skipped: bidder not in Postgres, ` +
         `defaulted created_by to 1 on ${defaultedCreatedBy} rows, ` +

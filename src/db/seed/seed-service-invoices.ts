@@ -5,6 +5,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 import { asString } from "./resolve-location-id.js";
 import { computeServiceFeeAmount } from "../../lib/service-invoices/fee-calc.js";
@@ -57,7 +58,8 @@ SELECT
 FROM tbl_Data_ServiceInvoice
 `;
 
-const UPSERT_SQL = `
+// 35 params: paid_amount($23=0), unpaid_amount($24=grand_total), latest_payment_date($25=null), payment_status($26='unpaid') passed explicitly
+const HEAD_SQL = `
 INSERT INTO service_invoices (
   id, client_id, plant_location_id, from_date, to_date, type,
   order_number, order_date, grace_period,
@@ -68,17 +70,9 @@ INSERT INTO service_invoices (
   paid_amount, unpaid_amount, latest_payment_date, payment_status,
   status, generated_at, generated_by, email_sent_at, email_sent_by,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3, $4, $5, $6,
-  $7, $8, $9,
-  $10, $11,
-  $12, $13, $14,
-  $15, $16, $17, $18,
-  $19, $20, $21, $22,
-  0, $17, NULL, 'unpaid',
-  $23, $24, $25, $26, $27,
-  $28, $29, $30, $31
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   client_id = EXCLUDED.client_id,
   plant_location_id = EXCLUDED.plant_location_id,
@@ -307,144 +301,116 @@ async function main() {
     ]);
     userIds.add(SEED_DEFAULT_USER_ID);
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Build rows in-memory (35 params each)
+    const rows: unknown[][] = [];
     let skippedClient = 0;
     let skippedPlant = 0;
     let skippedStatus = 0;
     let skippedUnknownSrt = 0;
     const mixedSkipped: number[] = [];
-    const feeMismatch: Array<{ id: number; legacy: number; computed: number }> =
-      [];
+    const feeMismatch: Array<{ id: number; legacy: number; computed: number }> = [];
     let defaultedCreatedBy = 0;
 
+    for (const r of result.recordset) {
+      const serviceInvoiceId = toId(r.serviceInvoiceId);
+      const clientId = toId(r.clientId);
+      const locationId = toId(r.locationId);
+      const srtId = toId(r.srtId);
+      const createdByRaw = toId(r.createdBy);
+      const updatedByRaw = toId(r.updatedBy);
+
+      if (srtId === SRT_MIXED) {
+        if (serviceInvoiceId != null) mixedSkipped.push(serviceInvoiceId);
+        continue;
+      }
+
+      const fee = mapFee(r);
+      if (!fee) { skippedUnknownSrt++; continue; }
+      if (clientId == null || !clientIds.has(clientId)) { skippedClient++; continue; }
+      if (locationId == null || !plantIds.has(locationId)) { skippedPlant++; continue; }
+
+      const status = mapStatus(r.verifyStatusId);
+      if (!status) { skippedStatus++; continue; }
+
+      const computed = computeServiceFeeAmount(
+        fee.serviceFeeType,
+        fee.serviceFeeValue,
+        fee.totalQuantity,
+        fee.totalAmount,
+      );
+      if (serviceInvoiceId != null && Math.abs(computed - fee.serviceFeeAmount) > 0.05) {
+        feeMismatch.push({ id: serviceInvoiceId, legacy: fee.serviceFeeAmount, computed });
+      }
+
+      const createdBy = resolveAuditUserId(createdByRaw, userIds);
+      if (createdByRaw !== createdBy) defaultedCreatedBy++;
+      const updatedBy = resolveAuditUserIdIfTimestamp(r.updatedAt, updatedByRaw, userIds);
+      const generatedByRaw = toId(r.invoiceGeneratedBy);
+      const generatedBy =
+        generatedByRaw != null && userIds.has(generatedByRaw) ? generatedByRaw : null;
+      const generatedAt =
+        r.invoiceGeneratedActualDate && r.invoiceGeneratedActualDate !== "null"
+          ? r.invoiceGeneratedActualDate
+          : null;
+      const emailSentByRaw = toId(r.emailSentBy);
+      const emailSentBy =
+        emailSentByRaw != null && userIds.has(emailSentByRaw) ? emailSentByRaw : null;
+      const emailSentAt =
+        r.emailSentAt && r.emailSentAt !== "null" ? r.emailSentAt : null;
+
+      const gstPercent = toNum(r.gstPer) || 18;
+      const gstAmount =
+        toNum(r.gstAmount) || Math.round(fee.serviceFeeAmount * gstPercent) / 100;
+      const grandTotal = toNum(r.grandTotal) || fee.serviceFeeAmount + gstAmount;
+      const invoiceDate = invoiceDateOnly(r.invoiceDate);
+      const gracePeriod = toId(r.gracePeriod);
+      const paymentDueDate =
+        invoiceDateOnly(r.paymentDueDate) ??
+        (invoiceDate != null ? addDaysToDateOnly(invoiceDate, gracePeriod ?? 0) : null);
+
+      rows.push([
+        serviceInvoiceId,
+        clientId,
+        locationId,
+        r.fromDate,
+        r.toDate,
+        mapType(r.typeId),
+        asString(r.orderNumber),
+        r.orderDate && r.orderDate !== "null" ? r.orderDate : null,
+        gracePeriod,
+        fee.totalQuantity.toFixed(3),
+        fee.totalAmount.toFixed(3),
+        fee.serviceFeeType,
+        fee.serviceFeeValue.toFixed(4),
+        fee.serviceFeeAmount.toFixed(3),
+        gstPercent.toFixed(2),
+        gstAmount.toFixed(2),
+        grandTotal.toFixed(3),
+        roundOffString(r.roundOff),
+        asString(r.serviceChargeDescription),
+        asString(r.invoiceFormat),
+        invoiceDate,
+        paymentDueDate,
+        0,                        // paid_amount
+        grandTotal.toFixed(3),    // unpaid_amount = grand_total on insert
+        null,                     // latest_payment_date
+        "unpaid",                 // payment_status
+        status,
+        generatedAt,
+        generatedBy,
+        emailSentAt,
+        emailSentBy,
+        r.createdAt ?? new Date().toISOString(),
+        createdBy,
+        r.updatedAt,
+        updatedBy,
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        const serviceInvoiceId = toId(r.serviceInvoiceId);
-        const clientId = toId(r.clientId);
-        const locationId = toId(r.locationId);
-        const srtId = toId(r.srtId);
-        const createdByRaw = toId(r.createdBy);
-        const updatedByRaw = toId(r.updatedBy);
-
-        if (srtId === SRT_MIXED) {
-          if (serviceInvoiceId != null) mixedSkipped.push(serviceInvoiceId);
-          continue;
-        }
-
-        const fee = mapFee(r);
-        if (!fee) {
-          skippedUnknownSrt++;
-          continue;
-        }
-
-        if (clientId == null || !clientIds.has(clientId)) {
-          skippedClient++;
-          continue;
-        }
-        if (locationId == null || !plantIds.has(locationId)) {
-          skippedPlant++;
-          continue;
-        }
-
-        const status = mapStatus(r.verifyStatusId);
-        if (!status) {
-          skippedStatus++;
-          continue;
-        }
-
-        const computed = computeServiceFeeAmount(
-          fee.serviceFeeType,
-          fee.serviceFeeValue,
-          fee.totalQuantity,
-          fee.totalAmount,
-        );
-        if (
-          serviceInvoiceId != null &&
-          Math.abs(computed - fee.serviceFeeAmount) > 0.05
-        ) {
-          feeMismatch.push({
-            id: serviceInvoiceId,
-            legacy: fee.serviceFeeAmount,
-            computed,
-          });
-        }
-
-        const createdBy = resolveAuditUserId(createdByRaw, userIds);
-        if (createdByRaw !== createdBy) defaultedCreatedBy++;
-        const updatedBy = resolveAuditUserIdIfTimestamp(
-          r.updatedAt,
-          updatedByRaw,
-          userIds,
-        );
-        const generatedByRaw = toId(r.invoiceGeneratedBy);
-        const generatedBy =
-          generatedByRaw != null && userIds.has(generatedByRaw)
-            ? generatedByRaw
-            : null;
-        const generatedAt =
-          r.invoiceGeneratedActualDate &&
-          r.invoiceGeneratedActualDate !== "null"
-            ? r.invoiceGeneratedActualDate
-            : null;
-        const emailSentByRaw = toId(r.emailSentBy);
-        const emailSentBy =
-          emailSentByRaw != null && userIds.has(emailSentByRaw)
-            ? emailSentByRaw
-            : null;
-        const emailSentAt =
-          r.emailSentAt && r.emailSentAt !== "null" ? r.emailSentAt : null;
-
-        const gstPercent = toNum(r.gstPer) || 18;
-        const gstAmount =
-          toNum(r.gstAmount) ||
-          Math.round(fee.serviceFeeAmount * gstPercent) / 100;
-        const grandTotal =
-          toNum(r.grandTotal) || fee.serviceFeeAmount + gstAmount;
-        const invoiceDate = invoiceDateOnly(r.invoiceDate);
-        const gracePeriod = toId(r.gracePeriod);
-        const paymentDueDate =
-          invoiceDateOnly(r.paymentDueDate) ??
-          (invoiceDate != null
-            ? addDaysToDateOnly(invoiceDate, gracePeriod ?? 0)
-            : null);
-
-        await client.query(UPSERT_SQL, [
-          serviceInvoiceId,
-          clientId,
-          locationId,
-          r.fromDate,
-          r.toDate,
-          mapType(r.typeId),
-          asString(r.orderNumber),
-          r.orderDate && r.orderDate !== "null" ? r.orderDate : null,
-          gracePeriod,
-          fee.totalQuantity.toFixed(3),
-          fee.totalAmount.toFixed(3),
-          fee.serviceFeeType,
-          fee.serviceFeeValue.toFixed(4),
-          fee.serviceFeeAmount.toFixed(3),
-          gstPercent.toFixed(2),
-          gstAmount.toFixed(2),
-          grandTotal.toFixed(3),
-          roundOffString(r.roundOff),
-          asString(r.serviceChargeDescription),
-          asString(r.invoiceFormat),
-          invoiceDate,
-          paymentDueDate,
-          status,
-          generatedAt,
-          generatedBy,
-          emailSentAt,
-          emailSentBy,
-          r.createdAt ?? new Date().toISOString(),
-          createdBy,
-          r.updatedAt,
-          updatedBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "service_invoices", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (e) {
       await client.query("ROLLBACK");
@@ -455,13 +421,13 @@ async function main() {
 
     const sourceCount = result.recordset.length;
     console.log(
-      `Upserted ${upserted} / ${sourceCount} rows into service_invoices ` +
+      `Upserted ${rows.length} / ${sourceCount} rows into service_invoices ` +
         `(${skippedClient} skipped missing client, ${skippedPlant} skipped missing plant, ` +
         `${skippedStatus} skipped unknown status, ${skippedUnknownSrt} skipped unknown SRT, ` +
         `${defaultedCreatedBy} defaulted created_by to 1) in ${Date.now() - started}ms.`,
     );
 
-    if (sourceCount > 0 && upserted === 0) {
+    if (sourceCount > 0 && rows.length === 0) {
       console.warn(
         "\n*** WARN: No service invoices upserted. Check that seed:clients and seed:plant-locations ran first, and MSSQL has rows. ***\n",
       );

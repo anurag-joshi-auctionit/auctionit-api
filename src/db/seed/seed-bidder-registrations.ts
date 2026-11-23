@@ -4,6 +4,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 
 const SOURCE_SQL = `
@@ -72,7 +73,7 @@ SELECT
 FROM tbl_Data_UserReg
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO bidder_registrations (
   id, company_name, type_of_company_id, business_activity_id,
   address, legacy_country_id, legacy_state_id, city, legacy_city_id, pincode,
@@ -92,26 +93,9 @@ INSERT INTO bidder_registrations (
   payment_updated_by, payment_updated_at,
   account_number, bank_name, ifsc_code,
   created_at, created_by
-) VALUES (
-  $1, $2, $3, $4,
-  $5, $6, $7, $8, $9, $10,
-  $11, $12, $13, $14, $15, $16,
-  $17,
-  $18, $19, $20,
-  $21, $22, $23, $24,
-  $25, $26, $27,
-  $28, $29,
-  $30, $31,
-  $32, $33, $34, $35, $36, $37,
-  $38, $39, $40,
-  $41, $42, $43,
-  $44, $45, $46, $47,
-  $48, $49, $50,
-  $51, $52, $53, $54, $55,
-  $56, $57,
-  $58, $59, $60,
-  $61, $62
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   company_name = EXCLUDED.company_name,
   type_of_company_id = EXCLUDED.type_of_company_id,
@@ -175,6 +159,7 @@ ON CONFLICT (id) DO UPDATE SET
   created_at = EXCLUDED.created_at,
   created_by = EXCLUDED.created_by
 `;
+
 
 type SourceRow = {
   id: number;
@@ -280,96 +265,93 @@ async function main() {
     const validUserIds = new Set(userIdsResult.rows.map((r) => r.id));
     validUserIds.add(SEED_DEFAULT_USER_ID);
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Build rows in-memory (62 params each)
+    const rows: unknown[][] = [];
     let nulledBidder = 0;
+
+    for (const r of result.recordset) {
+      const bidderId =
+        r.bidderId != null && validBidderIds.has(r.bidderId) ? r.bidderId : null;
+      if (r.bidderId != null && bidderId === null) nulledBidder++;
+
+      // Legacy UserReg has no CreatedBy; default to seed user when created_at is set.
+      const createdBy = resolveAuditUserIdIfTimestamp(r.createdAt, null, validUserIds);
+      const paymentUpdatedBy = resolveAuditUserIdIfTimestamp(
+        r.paymentUpdatedAt,
+        r.paymentUpdatedBy,
+        validUserIds,
+      );
+
+      rows.push([
+        r.id,
+        asString(r.companyName),
+        r.typeOfCompanyId,
+        r.businessActivityId,
+        asString(r.address),
+        r.legacyCountryId,
+        r.legacyStateId,
+        asString(r.city),
+        r.legacyCityId,
+        asString(r.pincode),
+        asString(r.phone),
+        asString(r.secondaryPhone),
+        asString(r.registeredEmail),
+        asString(r.email),
+        asString(r.fullName),
+        asString(r.designation),
+        asString(r.whatsappNumber),
+        asString(r.gstin),
+        r.invalidGst,
+        asString(r.pan),
+        asString(r.name),
+        asString(r.place),
+        r.regDate,
+        asString(r.designationPostedBy),
+        asString(r.panCardFileName),
+        asString(r.proofOfAddressFileName),
+        asString(r.gstinFileName),
+        asString(r.cancelledChequeFileName),
+        asString(r.othersFileName),
+        asString(r.subCategoryIds),
+        asString(r.clientIds),
+        r.adminStatus,
+        r.verified,
+        bidderId,
+        asString(r.remark),
+        r.crmId,
+        asBool(r.isClosed),
+        r.lastEmailSentDateTime,
+        r.emailSentCount,
+        r.isEmailSent,
+        r.lastEmailSentDate,
+        asBool(r.isReviseSubsEmailSent),
+        r.finalSaveClickCount,
+        r.subscriptionTypeId,
+        r.bidderScopeId,
+        r.fromDate,
+        r.toDate,
+        asNumeric(r.subscriptionPrice),
+        asNumeric(r.gstAmount),
+        asNumeric(r.amount),
+        asString(r.transactionId),
+        r.paymentMode,
+        r.paymentDate,
+        asString(r.paymentStatus),
+        asString(r.paymentRemarks),
+        paymentUpdatedBy,
+        r.paymentUpdatedAt,
+        asString(r.accountNumber),
+        asString(r.bankName),
+        asString(r.ifscCode),
+        r.createdAt,
+        createdBy,
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        const bidderId =
-          r.bidderId != null && validBidderIds.has(r.bidderId)
-            ? r.bidderId
-            : null;
-        if (r.bidderId != null && bidderId === null) nulledBidder++;
-
-        // Legacy UserReg has no CreatedBy; default to seed user when created_at is set.
-        const createdBy = resolveAuditUserIdIfTimestamp(
-          r.createdAt,
-          null,
-          validUserIds,
-        );
-        const paymentUpdatedBy = resolveAuditUserIdIfTimestamp(
-          r.paymentUpdatedAt,
-          r.paymentUpdatedBy,
-          validUserIds,
-        );
-
-        await client.query(UPSERT_SQL, [
-          r.id,
-          asString(r.companyName),
-          r.typeOfCompanyId,
-          r.businessActivityId,
-          asString(r.address),
-          r.legacyCountryId,
-          r.legacyStateId,
-          asString(r.city),
-          r.legacyCityId,
-          asString(r.pincode),
-          asString(r.phone),
-          asString(r.secondaryPhone),
-          asString(r.registeredEmail),
-          asString(r.email),
-          asString(r.fullName),
-          asString(r.designation),
-          asString(r.whatsappNumber),
-          asString(r.gstin),
-          r.invalidGst,
-          asString(r.pan),
-          asString(r.name),
-          asString(r.place),
-          r.regDate,
-          asString(r.designationPostedBy),
-          asString(r.panCardFileName),
-          asString(r.proofOfAddressFileName),
-          asString(r.gstinFileName),
-          asString(r.cancelledChequeFileName),
-          asString(r.othersFileName),
-          asString(r.subCategoryIds),
-          asString(r.clientIds),
-          r.adminStatus,
-          r.verified,
-          bidderId,
-          asString(r.remark),
-          r.crmId,
-          asBool(r.isClosed),
-          r.lastEmailSentDateTime,
-          r.emailSentCount,
-          r.isEmailSent,
-          r.lastEmailSentDate,
-          asBool(r.isReviseSubsEmailSent),
-          r.finalSaveClickCount,
-          r.subscriptionTypeId,
-          r.bidderScopeId,
-          r.fromDate,
-          r.toDate,
-          asNumeric(r.subscriptionPrice),
-          asNumeric(r.gstAmount),
-          asNumeric(r.amount),
-          asString(r.transactionId),
-          r.paymentMode,
-          r.paymentDate,
-          asString(r.paymentStatus),
-          asString(r.paymentRemarks),
-          paymentUpdatedBy,
-          r.paymentUpdatedAt,
-          asString(r.accountNumber),
-          asString(r.bankName),
-          asString(r.ifscCode),
-          r.createdAt,
-          createdBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "bidder_registrations", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -378,7 +360,7 @@ async function main() {
       client.release();
     }
     console.log(
-      `Upserted ${upserted} rows into bidder_registrations ` +
+      `Upserted ${rows.length} rows into bidder_registrations ` +
         `(nulled bidder_id on ${nulledBidder} rows) ` +
         `in ${Date.now() - started}ms.`,
     );

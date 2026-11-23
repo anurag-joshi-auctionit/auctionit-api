@@ -5,6 +5,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 import { asString } from "./resolve-location-id.js";
 
@@ -23,20 +24,13 @@ FROM tbl_Config_ItemMst im
 LEFT JOIN tbl_Config_BenchMarkMeterialMst bm ON bm.MaterialId = im.MaterialId
 `;
 
-const BENCHMARK_MATERIAL_UPSERT_SQL = `
-INSERT INTO benchmark_materials (name, is_active, created_at, created_by, updated_at, updated_by)
-VALUES ($1, true, now(), $2, now(), $2)
-ON CONFLICT (lower(name)) DO NOTHING
-`;
-
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO items (
   id, client_id, name, is_active, material_id, benchmark_material_id, uom_id,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3, $4, NULL, $5, NULL,
-  $6, $7, $8, $9
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   client_id = EXCLUDED.client_id,
   name = EXCLUDED.name,
@@ -71,15 +65,20 @@ async function loadUserIds(pool: pg.Pool): Promise<Set<number>> {
   return new Set(res.rows.map((r) => r.id));
 }
 
-/** Upserts any benchmark material names not already present, then returns a lower(name) -> id map. */
+/** Upserts any benchmark material names not already present (bulk unnest), then returns a lower(name) -> id map. */
 async function resolveBenchmarkMaterialIds(
   client: pg.PoolClient,
   names: string[],
   userId: number,
 ): Promise<Map<string, number>> {
   const distinct = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
-  for (const name of distinct) {
-    await client.query(BENCHMARK_MATERIAL_UPSERT_SQL, [name, userId]);
+  if (distinct.length > 0) {
+    await client.query(
+      `INSERT INTO benchmark_materials (name, is_active, created_at, created_by, updated_at, updated_by)
+       SELECT unnest($1::text[]), true, now(), $2, now(), $2
+       ON CONFLICT (lower(name)) DO NOTHING`,
+      [distinct, userId],
+    );
   }
 
   const res = await client.query<{ id: number; name: string }>(
@@ -112,7 +111,6 @@ async function main() {
     userIds.add(SEED_DEFAULT_USER_ID);
 
     const client = await pgPool.connect();
-    let upserted = 0;
     let skippedClient = 0;
     let defaultedCreatedBy = 0;
     let benchmarkMaterialsMatched = 0;
@@ -128,6 +126,8 @@ async function main() {
         SEED_DEFAULT_USER_ID,
       );
 
+      // Build rows in-memory (11 params each: id, client_id, name, is_active, material_id=null, benchmark_material_id, uom_id=null, ...)
+      const rows: unknown[][] = [];
       for (const r of result.recordset) {
         if (r.clientId == null || !clientIds.has(r.clientId)) {
           skippedClient++;
@@ -142,19 +142,22 @@ async function main() {
           : null;
         if (benchmarkMaterialId != null) benchmarkMaterialsMatched++;
 
-        await client.query(UPSERT_SQL, [
+        rows.push([
           r.itemId,
           r.clientId,
           asString(r.itemDescription),
           Boolean(r.isActive),
+          null,  // material_id
           benchmarkMaterialId,
+          null,  // uom_id
           r.createdAt,
           createdBy,
           r.updatedAt,
           resolveAuditUserIdIfTimestamp(r.updatedAt, r.updatedBy, userIds),
         ]);
-        upserted++;
       }
+
+      await upsertBatched(client, "items", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -164,7 +167,7 @@ async function main() {
     }
 
     console.log(
-      `Upserted ${upserted} rows into items (material_id left NULL; ` +
+      `Upserted ${result.recordset.length - skippedClient} rows into items (material_id left NULL; ` +
         `benchmark_material_id matched on ${benchmarkMaterialsMatched} rows, ` +
         `filled only where previously unset) ` +
         `(${skippedClient} skipped missing client, ` +

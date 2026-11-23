@@ -3,6 +3,8 @@ import { hashPasswordForStorage } from "../../auth/hash.js";
 import { env } from "../../env.js";
 import { ROLE_CODES, type RoleCode } from "../schema/roles.js";
 import { SEED_DEFAULT_USER_ID } from "./audit-user.js";
+import { applySanitizeContacts } from "./apply-sanitize-contacts.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 
 /** Shared password for all seeded users (stored as bcrypt). */
@@ -47,7 +49,7 @@ SELECT
 FROM tbl_Config_User
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO users (
   id, user_login_name, name, email_id, designation, unique_id,
   phone_number, secondary_phone_number, whatsapp_number, whatsapp_sec_number,
@@ -60,19 +62,9 @@ INSERT INTO users (
   session_id, session_expires_at, ip_address,
   token, token_at,
   created_at, created_by, last_updated_at, last_updated_by
-) VALUES (
-  $1, $2, $3, $4, $5, $6,
-  $7, $8, $9, $10,
-  $11, $12, $13, $14,
-  $15, $16, $17,
-  $18,
-  $19, $20,
-  $21, $22,
-  $23, $24, $25,
-  $26, $27, $28,
-  $29, $30,
-  $31, $32, $33, $34
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   user_login_name = EXCLUDED.user_login_name,
   name = EXCLUDED.name,
@@ -208,61 +200,56 @@ async function main() {
       `Seeding all users with password "${SEED_PASSWORD}" (algo=${seedPasswordAlgo}).`,
     );
 
+    // Build rows in-memory (34 params each)
+    const rows: unknown[][] = [];
+    for (const r of result.recordset) {
+      const roleCode = computeRoleCode(r);
+      const roleId = roleMap.get(roleCode);
+      if (roleId === undefined) throw new Error(`Unknown role code: ${roleCode}`);
+      const createdBy = auditUserId(r.createdBy);
+      const lastUpdatedBy = r.lastUpdatedAt != null ? auditUserId(r.lastUpdatedBy) : null;
+      rows.push([
+        r.userId,
+        r.userLoginName,
+        r.name,
+        asString(r.emailId),
+        asString(r.designation),
+        asString(r.uniqueId),
+        asString(r.phoneNumber),
+        asString(r.secondaryPhoneNumber),
+        asString(r.whatsappNumber),
+        asString(r.whatsappSecNumber),
+        seedPasswordHash,
+        null,
+        true,
+        seedPasswordAlgo,
+        asString(r.mpin),
+        null,
+        null,
+        roleId,
+        asBool(r.ndncAccepted),
+        r.ndncUpdatedAt,
+        Boolean(r.isActive),
+        Boolean(r.isOldDesign),
+        asBool(r.isLogin),
+        r.lastLoginAt,
+        r.lastLogoutAt,
+        asString(r.sessionId),
+        r.sessionExpiresAt,
+        asString(r.ipAddress),
+        asString(r.token),
+        r.tokenAt,
+        r.createdAt,
+        createdBy,
+        r.lastUpdatedAt,
+        lastUpdatedBy,
+      ]);
+    }
+
     const client = await pgPool.connect();
-    let upserted = 0;
     try {
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        const emailId = asString(r.emailId);
-        const phoneNumber = asString(r.phoneNumber);
-        const roleCode = computeRoleCode(r);
-        const roleId = roleMap.get(roleCode);
-        if (roleId === undefined) {
-          // already validated above, this is just to narrow types
-          throw new Error(`Unknown role code: ${roleCode}`);
-        }
-        const createdBy = auditUserId(r.createdBy);
-        const lastUpdatedBy =
-          r.lastUpdatedAt != null ? auditUserId(r.lastUpdatedBy) : null;
-        await client.query(UPSERT_SQL, [
-          r.userId,
-          r.userLoginName,
-          r.name,
-          emailId,
-          asString(r.designation),
-          asString(r.uniqueId),
-          phoneNumber,
-          asString(r.secondaryPhoneNumber),
-          asString(r.whatsappNumber),
-          asString(r.whatsappSecNumber),
-          seedPasswordHash,
-          null,
-          // Shared seed password is a permanent login password, not a temp reset.
-          true,
-          seedPasswordAlgo,
-          asString(r.mpin),
-          null,
-          null,
-          roleId,
-          asBool(r.ndncAccepted),
-          r.ndncUpdatedAt,
-          Boolean(r.isActive),
-          Boolean(r.isOldDesign),
-          asBool(r.isLogin),
-          r.lastLoginAt,
-          r.lastLogoutAt,
-          asString(r.sessionId),
-          r.sessionExpiresAt,
-          asString(r.ipAddress),
-          asString(r.token),
-          r.tokenAt,
-          r.createdAt,
-          createdBy,
-          r.lastUpdatedAt,
-          lastUpdatedBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "users", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -271,9 +258,19 @@ async function main() {
       client.release();
     }
 
-    console.log(
-      `Upserted ${upserted} rows into users in ${Date.now() - started}ms.`,
-    );
+    console.log(`Upserted ${rows.length} rows into users in ${Date.now() - started}ms.`);
+
+    // Sanitize contact PII so local/staging never reaches production contacts.
+    const sanitizeClient = await pgPool.connect();
+    try {
+      const counts = await applySanitizeContacts(sanitizeClient);
+      console.log(
+        `Sanitized contacts: ${counts.bidderUsers} bidder users, ${counts.clientUsers} client users, ` +
+          `${counts.plants} plants, ${counts.clients} clients, ${counts.outbox} outbox rows.`,
+      );
+    } finally {
+      sanitizeClient.release();
+    }
   } finally {
     await mssqlPool.close();
     await pgPool.end();

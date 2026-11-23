@@ -9,6 +9,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { resolveAuctionSeedStatus } from "./seed-auctions-status.js";
 import { legacySealedBidWindow } from "./seed-sealed-bid-window.js";
 import { connectMssql } from "./mssql.js";
@@ -47,7 +48,7 @@ SELECT
 FROM tbl_Data_Auction a
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO auctions (
   auction_id, client_id,
   auction_number, auction_type, consolidated_emd_amount,
@@ -59,18 +60,9 @@ INSERT INTO auctions (
   is_sealed_bid, sealed_bid_date, sealed_bid_start_time, sealed_bid_end_time,
   ip_address_restriction_enabled, is_rank_based,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2,
-  $3, $4, $5,
-  $6,
-  $7, $8, $9,
-  $10,
-  $11, $12,
-  $13, $14,
-  $15, $16, $17, $18,
-  $19, $20,
-  $21, $22, $23, $24
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (auction_id) DO UPDATE SET
   client_id = EXCLUDED.client_id,
   auction_number = EXCLUDED.auction_number,
@@ -173,83 +165,75 @@ async function main() {
     validUserIds.add(SEED_DEFAULT_USER_ID);
     const validClientIds = new Set(clientIdsResult.rows.map((r) => r.id));
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Build rows in-memory (24 params each)
+    const rows: unknown[][] = [];
     let skippedNoClient = 0;
     const cappedSealedWindows: number[] = [];
     let defaultedCreatedBy = 0;
     let defaultedUpdatedBy = 0;
     let nulledAuctionType = 0;
+
+    for (const r of result.recordset) {
+      if (!validClientIds.has(r.clientId)) {
+        skippedNoClient++;
+        continue;
+      }
+
+      const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
+      if (r.createdBy !== createdBy) defaultedCreatedBy++;
+      const updatedBy = resolveAuditUserIdIfTimestamp(r.updatedAt, r.updatedBy, validUserIds);
+      if (r.updatedAt != null && (r.updatedBy == null || r.updatedBy !== updatedBy)) {
+        defaultedUpdatedBy++;
+      }
+
+      const auctionType = normalizeAuctionType(r.auctionType);
+      if (r.auctionType != null && auctionType === null) nulledAuctionType++;
+
+      const resolved = resolveAuctionSeedStatus({
+        isDeleted: Boolean(r.isDeleted),
+        isClosed: Boolean(r.isClosed),
+        isPublished: Boolean(r.isPublished),
+        activeLotCount: Number(r.activeLotCount) || 0,
+        updatedAt: r.updatedAt,
+      });
+
+      const sealedWindow = legacySealedBidWindow(r.sealedBidPublishStartDate, r.sealedBidDurationHours);
+      if (sealedWindow.capped) cappedSealedWindows.push(r.auctionId);
+
+      rows.push([
+        r.auctionId,
+        r.clientId,
+        asString(r.auctionNumber),
+        auctionType,
+        nonNegativeNumeric(r.consolidatedEmdAmount),
+        r.auctionDate,
+        resolved.status,
+        r.auctionPublishStartDate,
+        resolved.closedAt,
+        Boolean(r.isActive),
+        r.noBidExtensionInterval != null && Number(r.noBidExtensionInterval) > 0
+          ? Number(r.noBidExtensionInterval) * 60
+          : r.noBidExtensionInterval,
+        r.noBidExtensionCountMax,
+        asBool(r.isNoBidExtension),
+        asBool(r.isStartBidPricePlusIncrement),
+        asBool(r.isSealedBid) ?? false,
+        sealedWindow.sealedBidDate,
+        sealedWindow.sealedBidStartTime,
+        sealedWindow.sealedBidEndTime,
+        asBool(r.ipAddressRestrictionEnabled),
+        Boolean(r.isRankBased),
+        r.createdAt,
+        createdBy,
+        r.updatedAt,
+        updatedBy,
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        if (!validClientIds.has(r.clientId)) {
-          skippedNoClient++;
-          continue;
-        }
-
-        const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
-        if (r.createdBy !== createdBy) defaultedCreatedBy++;
-        const updatedBy = resolveAuditUserIdIfTimestamp(
-          r.updatedAt,
-          r.updatedBy,
-          validUserIds,
-        );
-        if (
-          r.updatedAt != null &&
-          (r.updatedBy == null || r.updatedBy !== updatedBy)
-        ) {
-          defaultedUpdatedBy++;
-        }
-
-        const auctionType = normalizeAuctionType(r.auctionType);
-        if (r.auctionType != null && auctionType === null) nulledAuctionType++;
-
-        const resolved = resolveAuctionSeedStatus({
-          isDeleted: Boolean(r.isDeleted),
-          isClosed: Boolean(r.isClosed),
-          isPublished: Boolean(r.isPublished),
-          activeLotCount: Number(r.activeLotCount) || 0,
-          updatedAt: r.updatedAt,
-        });
-
-        const sealedWindow = legacySealedBidWindow(
-          r.sealedBidPublishStartDate,
-          r.sealedBidDurationHours,
-        );
-        if (sealedWindow.capped) cappedSealedWindows.push(r.auctionId);
-
-        await client.query(UPSERT_SQL, [
-          r.auctionId,
-          r.clientId,
-          asString(r.auctionNumber),
-          auctionType,
-          nonNegativeNumeric(r.consolidatedEmdAmount),
-          r.auctionDate,
-          resolved.status,
-          r.auctionPublishStartDate,
-          resolved.closedAt,
-          Boolean(r.isActive),
-          r.noBidExtensionInterval != null &&
-          Number(r.noBidExtensionInterval) > 0
-            ? Number(r.noBidExtensionInterval) * 60
-            : r.noBidExtensionInterval,
-          r.noBidExtensionCountMax,
-          asBool(r.isNoBidExtension),
-          asBool(r.isStartBidPricePlusIncrement),
-          asBool(r.isSealedBid) ?? false,
-          sealedWindow.sealedBidDate,
-          sealedWindow.sealedBidStartTime,
-          sealedWindow.sealedBidEndTime,
-          asBool(r.ipAddressRestrictionEnabled),
-          Boolean(r.isRankBased),
-          r.createdAt,
-          createdBy,
-          r.updatedAt,
-          updatedBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "auctions", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -258,7 +242,7 @@ async function main() {
       client.release();
     }
     console.log(
-      `Upserted ${upserted} rows into auctions ` +
+      `Upserted ${rows.length} rows into auctions ` +
         `(${skippedNoClient} skipped: client not in Postgres, ` +
         `defaulted created_by to 1 on ${defaultedCreatedBy} rows, ` +
         `nulled auction_type on ${nulledAuctionType} rows, ` +

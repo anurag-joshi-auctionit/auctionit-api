@@ -5,6 +5,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 
 /**
@@ -42,14 +43,13 @@ SELECT
 FROM tbl_Config_Client_ServiceProvider_Map
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO user_clients (
   user_id, client_id, is_active,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3,
-  $4, $5, $6, $7
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (user_id, client_id) DO UPDATE SET
   is_active = EXCLUDED.is_active,
   updated_at = EXCLUDED.updated_at,
@@ -203,50 +203,37 @@ async function main() {
     validUserIds.add(SEED_DEFAULT_USER_ID);
     const validClientIds = new Set(clientRows.rows.map((r) => r.id));
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Build rows in-memory (7 params each)
+    const rows: unknown[][] = [];
     let skippedMissingUser = 0;
     let skippedMissingClient = 0;
     let defaultedCreatedBy = 0;
     let defaultedUpdatedBy = 0;
 
+    for (const r of merged) {
+      if (!validUserIds.has(r.userId)) { skippedMissingUser++; continue; }
+      if (!validClientIds.has(r.clientId)) { skippedMissingClient++; continue; }
+
+      const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
+      if (r.createdBy !== createdBy) defaultedCreatedBy++;
+      const updatedBy = resolveAuditUserIdIfTimestamp(r.updatedAt, r.updatedBy, validUserIds);
+      if (r.updatedAt != null && (r.updatedBy == null || r.updatedBy !== updatedBy)) defaultedUpdatedBy++;
+
+      rows.push([
+        r.userId,
+        r.clientId,
+        Boolean(r.isActive),
+        r.createdAt ?? new Date().toISOString(),
+        createdBy,
+        r.updatedAt,
+        updatedBy,
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-      for (const r of merged) {
-        if (!validUserIds.has(r.userId)) {
-          skippedMissingUser++;
-          continue;
-        }
-        if (!validClientIds.has(r.clientId)) {
-          skippedMissingClient++;
-          continue;
-        }
-
-        const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
-        if (r.createdBy !== createdBy) defaultedCreatedBy++;
-        const updatedBy = resolveAuditUserIdIfTimestamp(
-          r.updatedAt,
-          r.updatedBy,
-          validUserIds,
-        );
-        if (
-          r.updatedAt != null &&
-          (r.updatedBy == null || r.updatedBy !== updatedBy)
-        ) {
-          defaultedUpdatedBy++;
-        }
-
-        await client.query(UPSERT_SQL, [
-          r.userId,
-          r.clientId,
-          Boolean(r.isActive),
-          r.createdAt ?? new Date().toISOString(),
-          createdBy,
-          r.updatedAt,
-          updatedBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "user_clients", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -256,7 +243,7 @@ async function main() {
     }
 
     console.log(
-      `Upserted ${upserted} rows into user_clients ` +
+      `Upserted ${rows.length} rows into user_clients ` +
         `(${skippedMissingUser} skipped: user not in Postgres, ` +
         `${skippedMissingClient} skipped: client not in Postgres, ` +
         `defaulted created_by to 1 on ${defaultedCreatedBy} rows, ` +

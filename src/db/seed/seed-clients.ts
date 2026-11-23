@@ -5,11 +5,11 @@ import {
     resolveAuditUserIdIfTimestamp,
     SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 import {
     asString,
     loadLocationLookupMap,
-    locationIdSubquery,
     normalizeCity,
     normalizeCountry,
     normalizeGstin,
@@ -51,7 +51,7 @@ SELECT
 FROM tbl_Config_ClientMst
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO clients (
   id, company_name, address, location_id, pincode,
   phone, website, email, pan, tan, gstin, is_active,
@@ -59,15 +59,9 @@ INSERT INTO clients (
   is_last_bid_extension, last_bid_extension_window, last_bid_extension_interval, last_bid_extension_count_max,
   is_staggered, stagger_interval,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3,
-  ${locationIdSubquery("$4", "$5", "$6")},
-  $7, $8, $9, $10, $11, $12, $13, $14,
-  $15, $16, $17,
-  $18, $19, $20, $21,
-  $22, $23,
-  $24, $25, $26, $27
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   company_name = EXCLUDED.company_name,
   address = EXCLUDED.address,
@@ -142,8 +136,8 @@ async function main() {
         const validUserIds = new Set(userIdsResult.rows.map((r) => r.id));
         validUserIds.add(SEED_DEFAULT_USER_ID);
 
-        const client = await pgPool.connect();
-        let upserted = 0;
+        // Build rows in-memory (25 params each — location_id resolved from map)
+        const rows: unknown[][] = [];
         let skippedLocation = 0;
         let skippedServiceFee = 0;
         let defaultedCreatedBy = 0;
@@ -154,91 +148,73 @@ async function main() {
             city: string | null;
         }> = [];
 
+        for (const r of result.recordset) {
+            const serviceFee = resolveSeedServiceFee(r.serviceFee);
+            if (serviceFee == null) {
+                skippedServiceFee++;
+                continue;
+            }
+
+            const country = normalizeCountry(r.country);
+            const state = normalizeState(r.state);
+            const city = normalizeCity(r.city);
+            const resolved = resolveLocationId(locationMap, r.country, r.state, r.city);
+
+            if (!state || !city) {
+                skippedLocation++;
+            } else if (resolved.locationId == null) {
+                skippedLocation++;
+                unmatchedLocations.push({ clientId: r.clientId, country, state, city });
+            }
+
+            const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
+            if (r.createdBy !== createdBy) defaultedCreatedBy++;
+            const updatedBy = resolveAuditUserIdIfTimestamp(r.updatedAt, r.updatedBy, validUserIds);
+
+            const lastBidWindow = Number(r.lastBidExtensionWindow) || 0;
+            const lastBidInterval = Number(r.lastBidExtensionInterval) || 0;
+            const lastBidMax = Number(r.lastBidExtensionCountMax) || 0;
+            const staggerInterval = Number(r.staggerInterval) || 0;
+            // Legacy StaggeringOfLots is an enum (0 None / 1 All Lots /
+            // 2 Subsequent Lots), not a boolean. The engine implements
+            // subsequent-lot chaining only, so any non-zero mode imports
+            // as staggered. The CHECK needs interval > 0 when on.
+            const isStaggered = Number(r.staggeringLotsMode) !== 0 && staggerInterval > 0;
+
+            rows.push([
+                r.clientId,
+                r.companyName,
+                asString(r.address),
+                resolved.locationId,
+                normalizePincode(r.pincode),
+                asString(r.phone),
+                asString(r.website),
+                null,
+                normalizePan(r.pan),
+                normalizeTan(r.tan),
+                normalizeGstin(r.gstin),
+                Boolean(r.isActive),
+                asString(r.auctionPrefix),
+                serviceFee.type,
+                serviceFee.value,
+                // Last-bid flag stays derived from its triple.
+                lastBidWindow > 0 && lastBidInterval > 0 && lastBidMax > 0,
+                lastBidWindow,
+                lastBidInterval,
+                lastBidMax,
+                isStaggered,
+                staggerInterval,
+                r.createdAt,
+                createdBy,
+                r.updatedAt,
+                updatedBy,
+            ]);
+        }
+
+        const client = await pgPool.connect();
         try {
             await client.query("BEGIN");
-            for (const r of result.recordset) {
-                const serviceFee = resolveSeedServiceFee(r.serviceFee);
-                if (serviceFee == null) {
-                    skippedServiceFee++;
-                    continue;
-                }
-
-                const country = normalizeCountry(r.country);
-                const state = normalizeState(r.state);
-                const city = normalizeCity(r.city);
-                const resolved = resolveLocationId(
-                    locationMap,
-                    r.country,
-                    r.state,
-                    r.city,
-                );
-
-                if (!state || !city) {
-                    skippedLocation++;
-                } else if (resolved.locationId == null) {
-                    skippedLocation++;
-                    unmatchedLocations.push({
-                        clientId: r.clientId,
-                        country,
-                        state,
-                        city,
-                    });
-                }
-
-                const createdBy = resolveAuditUserId(
-                    r.createdBy,
-                    validUserIds,
-                );
-                if (r.createdBy !== createdBy) defaultedCreatedBy++;
-                const updatedBy = resolveAuditUserIdIfTimestamp(
-                    r.updatedAt,
-                    r.updatedBy,
-                    validUserIds,
-                );
-
-                const lastBidWindow = Number(r.lastBidExtensionWindow) || 0;
-                const lastBidInterval = Number(r.lastBidExtensionInterval) || 0;
-                const lastBidMax = Number(r.lastBidExtensionCountMax) || 0;
-                const staggerInterval = Number(r.staggerInterval) || 0;
-                // Legacy StaggeringOfLots is an enum (0 None / 1 All Lots /
-                // 2 Subsequent Lots), not a boolean. The engine implements
-                // subsequent-lot chaining only, so any non-zero mode imports
-                // as staggered. The CHECK needs interval > 0 when on.
-                const isStaggered =
-                    Number(r.staggeringLotsMode) !== 0 && staggerInterval > 0;
-
-                await client.query(UPSERT_SQL, [
-                    r.clientId,
-                    r.companyName,
-                    asString(r.address),
-                    country,
-                    state,
-                    city,
-                    normalizePincode(r.pincode),
-                    asString(r.phone),
-                    asString(r.website),
-                    null,
-                    normalizePan(r.pan),
-                    normalizeTan(r.tan),
-                    normalizeGstin(r.gstin),
-                    Boolean(r.isActive),
-                    asString(r.auctionPrefix),
-                    serviceFee.type,
-                    serviceFee.value,
-                    // Last-bid flag stays derived from its triple.
-                    lastBidWindow > 0 && lastBidInterval > 0 && lastBidMax > 0,
-                    lastBidWindow,
-                    lastBidInterval,
-                    lastBidMax,
-                    isStaggered,
-                    staggerInterval,
-                    r.createdAt,
-                    createdBy,
-                    r.updatedAt,
-                    updatedBy,
-                ]);
-                upserted++;
-            }
+            await upsertBatched(client, "clients", HEAD_SQL, TAIL_SQL, rows);
             await client.query("COMMIT");
         } catch (err) {
             await client.query("ROLLBACK");
@@ -248,7 +224,7 @@ async function main() {
         }
 
         console.log(
-            `Upserted ${upserted} rows into clients ` +
+            `Upserted ${rows.length} rows into clients ` +
                 `(${skippedLocation} without resolved location_id, ` +
                 `${skippedServiceFee} skipped missing/invalid RevenueRate, ` +
                 `defaulted created_by to 1 on ${defaultedCreatedBy} rows) ` +

@@ -5,6 +5,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 
 // Subscription payment ledger from legacy tbl_Data_PaymentTransaction.
@@ -37,7 +38,7 @@ FROM tbl_Data_PaymentTransaction
 ORDER BY PaymentId
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO subscriptions (
   id, bidder_id, subscription_type_id,
   from_date, to_date,
@@ -47,16 +48,9 @@ INSERT INTO subscriptions (
   invoice_generated_at, invoice_generated_by,
   email_sent_at, email_sent_by,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3,
-  $4, $5,
-  $6, $7, $8,
-  $9, $10, $11, $12,
-  $13, $14, $15,
-  $16, $17,
-  $18, $19,
-  $20, $21, $22, $23
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   bidder_id = EXCLUDED.bidder_id,
   subscription_type_id = EXCLUDED.subscription_type_id,
@@ -175,118 +169,85 @@ async function main() {
       return;
     }
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Need a client early for ensureLegacyPlaceholders and ID lookups
+    const setupClient = await pgPool.connect();
+    let bidderIds: Set<number>;
+    let typeIds: Set<number>;
+    let modeIds: Set<number>;
+    let userIds: Set<number>;
+    try {
+      await ensureLegacyPlaceholders(setupClient);
+      [bidderIds, typeIds, modeIds, userIds] = await Promise.all([
+        setupClient.query<{ id: number }>("SELECT id FROM bidders").then((r) => new Set(r.rows.map((x) => x.id))),
+        setupClient.query<{ id: number }>("SELECT id FROM subscription_types").then((r) => new Set(r.rows.map((x) => x.id))),
+        setupClient.query<{ id: number }>("SELECT id FROM payment_types").then((r) => new Set(r.rows.map((x) => x.id))),
+        setupClient.query<{ id: number }>("SELECT id FROM users").then((r) => new Set(r.rows.map((x) => x.id))),
+      ]);
+      userIds.add(SEED_DEFAULT_USER_ID);
+    } finally {
+      setupClient.release();
+    }
+
+    // Build rows in-memory (23 params each)
+    const rows: unknown[][] = [];
     let generatedCount = 0;
     let skippedNullId = 0;
     let skippedMissingBidder = 0;
     let skippedMissingType = 0;
+
+    for (const r of result.recordset) {
+      const id = toIntOrNull(r.id);
+      const bidderId = toIntOrNull(r.bidderId) ?? 0;
+      const subscriptionTypeId = coerceSubscriptionTypeId(r.subscriptionTypeId);
+      if (id == null) { skippedNullId++; continue; }
+      if (!bidderIds.has(bidderId)) { skippedMissingBidder++; continue; }
+      if (!typeIds.has(subscriptionTypeId)) { skippedMissingType++; continue; }
+
+      let paymentMode = toIntOrNull(r.paymentMode);
+      if (paymentMode != null && !modeIds.has(paymentMode)) paymentMode = null;
+
+      const createdBy = resolveAuditUserId(toIntOrNull(r.createdBy), userIds);
+      const updatedBy = resolveAuditUserIdIfTimestamp(r.updatedAt, toIntOrNull(r.updatedBy), userIds);
+
+      const generated = isGeneratedInvoice(r);
+      if (generated) generatedCount++;
+      const invoiceGeneratedBy = generated
+        ? resolveAuditUserId(toIntOrNull(r.invoiceGeneratedBy), userIds)
+        : null;
+      const emailSentByRaw = toIntOrNull(r.emailSentBy);
+      const emailSentBy = emailSentByRaw != null && userIds.has(emailSentByRaw) ? emailSentByRaw : null;
+
+      rows.push([
+        id,
+        bidderId,
+        subscriptionTypeId,
+        dateOnly(r.fromDate),
+        dateOnly(r.toDate),
+        numericOrZero(r.subscriptionPrice),
+        numericOrZero(r.gstAmount),
+        numericOrZero(r.amount),
+        paymentMode,
+        asString(r.transactionId, 100),
+        dateOnly(r.paymentDate),
+        asString(r.remarks, 2000),
+        generated ? "generated" : "requested",
+        asString(r.invoiceFormat, 30),
+        dateOnly(r.invoiceCreatedDate),
+        generated ? (r.invoiceUploadDateTime ?? null) : null,
+        invoiceGeneratedBy,
+        r.emailSentAt && r.emailSentAt !== "null" ? r.emailSentAt : null,
+        emailSentBy,
+        r.createdAt ?? new Date().toISOString(),
+        createdBy,
+        r.updatedAt,
+        updatedBy,
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
-      await ensureLegacyPlaceholders(client);
-
-      const bidderIds = new Set(
-        (await client.query<{ id: number }>("SELECT id FROM bidders")).rows.map(
-          (r) => r.id,
-        ),
-      );
-      const typeIds = new Set(
-        (
-          await client.query<{ id: number }>(
-            "SELECT id FROM subscription_types",
-          )
-        ).rows.map((r) => r.id),
-      );
-      const modeIds = new Set(
-        (
-          await client.query<{ id: number }>("SELECT id FROM payment_types")
-        ).rows.map((r) => r.id),
-      );
-      const userIds = new Set(
-        (await client.query<{ id: number }>("SELECT id FROM users")).rows.map(
-          (r) => r.id,
-        ),
-      );
-      userIds.add(SEED_DEFAULT_USER_ID);
-
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        const id = toIntOrNull(r.id);
-        // BidderCompId 0 is acceptable legacy data (placeholder bidder id 0).
-        const bidderId = toIntOrNull(r.bidderId) ?? 0;
-        const subscriptionTypeId = coerceSubscriptionTypeId(
-          r.subscriptionTypeId,
-        );
-        if (id == null) {
-          skippedNullId++;
-          continue;
-        }
-        if (!bidderIds.has(bidderId)) {
-          skippedMissingBidder++;
-          continue;
-        }
-        if (!typeIds.has(subscriptionTypeId)) {
-          skippedMissingType++;
-          continue;
-        }
-
-        let paymentMode = toIntOrNull(r.paymentMode);
-        if (paymentMode != null && !modeIds.has(paymentMode)) {
-          paymentMode = null;
-        }
-
-        const createdBy = resolveAuditUserId(toIntOrNull(r.createdBy), userIds);
-        const updatedBy = resolveAuditUserIdIfTimestamp(
-          r.updatedAt,
-          toIntOrNull(r.updatedBy),
-          userIds,
-        );
-
-        const generated = isGeneratedInvoice(r);
-        if (generated) generatedCount++;
-        const invoiceStatus = generated ? "generated" : "requested";
-        const invoiceNumber = asString(r.invoiceFormat, 30);
-        const invoiceDate = dateOnly(r.invoiceCreatedDate);
-        const invoiceGeneratedAt = generated
-          ? (r.invoiceUploadDateTime ?? null)
-          : null;
-        const invoiceGeneratedBy = generated
-          ? resolveAuditUserId(toIntOrNull(r.invoiceGeneratedBy), userIds)
-          : null;
-        const emailSentByRaw = toIntOrNull(r.emailSentBy);
-        const emailSentBy =
-          emailSentByRaw != null && userIds.has(emailSentByRaw)
-            ? emailSentByRaw
-            : null;
-        const emailSentAt =
-          r.emailSentAt && r.emailSentAt !== "null" ? r.emailSentAt : null;
-
-        await client.query(UPSERT_SQL, [
-          id,
-          bidderId,
-          subscriptionTypeId,
-          dateOnly(r.fromDate),
-          dateOnly(r.toDate),
-          numericOrZero(r.subscriptionPrice),
-          numericOrZero(r.gstAmount),
-          numericOrZero(r.amount),
-          paymentMode,
-          asString(r.transactionId, 100),
-          dateOnly(r.paymentDate),
-          asString(r.remarks, 2000),
-          invoiceStatus,
-          invoiceNumber,
-          invoiceDate,
-          invoiceGeneratedAt,
-          invoiceGeneratedBy,
-          emailSentAt,
-          emailSentBy,
-          r.createdAt ?? new Date().toISOString(),
-          createdBy,
-          r.updatedAt,
-          updatedBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "subscriptions", HEAD_SQL, TAIL_SQL, rows);
       await client.query(
         `SELECT setval(pg_get_serial_sequence('subscriptions', 'id'), COALESCE((SELECT MAX(id) FROM subscriptions), 1))`,
       );
@@ -299,7 +260,7 @@ async function main() {
     }
 
     console.log(
-      `Upserted ${upserted} subscriptions ` +
+      `Upserted ${rows.length} subscriptions ` +
         `(${generatedCount} invoice status=generated, ` +
         `${skippedNullId} skipped: null id, ` +
         `${skippedMissingBidder} skipped: bidder not in Postgres, ` +

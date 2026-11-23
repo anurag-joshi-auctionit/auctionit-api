@@ -5,6 +5,7 @@ import {
     resolveAuditUserIdIfTimestamp,
     SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 import {
     asString,
@@ -28,14 +29,13 @@ SELECT
 FROM tbl_Config_MaterialLocation
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO material_locations (
   id, client_id, name, country, state, city, location_id, pincode, is_active,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9,
-  $10, $11, $12, $13
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   client_id = EXCLUDED.client_id,
   name = EXCLUDED.name,
@@ -97,8 +97,8 @@ async function main() {
         ]);
         userIds.add(SEED_DEFAULT_USER_ID);
 
-        const client = await pgPool.connect();
-        let upserted = 0;
+        // Build rows in-memory (13 params each)
+        const rows: unknown[][] = [];
         let skippedClient = 0;
         let defaultedCreatedBy = 0;
         let unresolvedLocation = 0;
@@ -110,57 +110,50 @@ async function main() {
             city: string | null;
         }> = [];
 
+        for (const r of result.recordset) {
+            if (r.clientId == null || !clientIds.has(r.clientId)) {
+                skippedClient++;
+                continue;
+            }
+
+            const createdBy = resolveAuditUserId(r.createdBy, userIds);
+            if (r.createdBy !== createdBy) defaultedCreatedBy++;
+
+            const resolved = resolveLocationId(locationMap, r.country, r.state, r.city);
+            if (resolved.locationId == null && resolved.state && resolved.city) {
+                unresolvedLocation++;
+                unmatchedLocations.push({
+                    id: r.locationId,
+                    clientId: r.clientId,
+                    country: resolved.country,
+                    state: resolved.state,
+                    city: resolved.city,
+                });
+            } else if (resolved.locationId == null) {
+                unresolvedLocation++;
+            }
+
+            rows.push([
+                r.locationId,
+                r.clientId,
+                asString(r.locationName),
+                asString(r.country),
+                asString(r.state),
+                asString(r.city),
+                resolved.locationId,
+                null,
+                Boolean(r.isActive),
+                r.createdAt,
+                createdBy,
+                r.updatedAt,
+                resolveAuditUserIdIfTimestamp(r.updatedAt, r.updatedBy, userIds),
+            ]);
+        }
+
+        const client = await pgPool.connect();
         try {
             await client.query("BEGIN");
-            for (const r of result.recordset) {
-                if (r.clientId == null || !clientIds.has(r.clientId)) {
-                    skippedClient++;
-                    continue;
-                }
-
-                const createdBy = resolveAuditUserId(r.createdBy, userIds);
-                if (r.createdBy !== createdBy) defaultedCreatedBy++;
-
-                const resolved = resolveLocationId(
-                    locationMap,
-                    r.country,
-                    r.state,
-                    r.city,
-                );
-                if (resolved.locationId == null && resolved.state && resolved.city) {
-                    unresolvedLocation++;
-                    unmatchedLocations.push({
-                        id: r.locationId,
-                        clientId: r.clientId,
-                        country: resolved.country,
-                        state: resolved.state,
-                        city: resolved.city,
-                    });
-                } else if (resolved.locationId == null) {
-                    unresolvedLocation++;
-                }
-
-                await client.query(UPSERT_SQL, [
-                    r.locationId,
-                    r.clientId,
-                    asString(r.locationName),
-                    asString(r.country),
-                    asString(r.state),
-                    asString(r.city),
-                    resolved.locationId,
-                    null,
-                    Boolean(r.isActive),
-                    r.createdAt,
-                    createdBy,
-                    r.updatedAt,
-                    resolveAuditUserIdIfTimestamp(
-                        r.updatedAt,
-                        r.updatedBy,
-                        userIds,
-                    ),
-                ]);
-                upserted++;
-            }
+            await upsertBatched(client, "material_locations", HEAD_SQL, TAIL_SQL, rows);
             await client.query("COMMIT");
         } catch (err) {
             await client.query("ROLLBACK");
@@ -170,7 +163,7 @@ async function main() {
         }
 
         console.log(
-            `Upserted ${upserted} rows into material_locations ` +
+            `Upserted ${rows.length} rows into material_locations ` +
                 `(${skippedClient} skipped missing client, ` +
                 `defaulted created_by to 1 on ${defaultedCreatedBy} rows, ` +
                 `${unresolvedLocation} without resolved location_id) ` +

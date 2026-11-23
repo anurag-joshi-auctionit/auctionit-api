@@ -5,6 +5,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 import { BACKFILL_SERVICE_INVOICE_PAYMENT_AGGREGATES_SQL } from "../../lib/service-invoices/payment-aggregates-sync.js";
 
@@ -27,14 +28,13 @@ FROM tbl_Data_ServiceInvoicePaymentDetails
 ORDER BY SIPId
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO service_invoice_payment_logs (
   id, service_invoice_id, paid_amount, paid_at,
   is_active, created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3, $4,
-  $5, $6, $7, $8, $9
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   service_invoice_id = EXCLUDED.service_invoice_id,
   paid_amount = EXCLUDED.paid_amount,
@@ -88,66 +88,45 @@ async function main() {
     const validUserIds = new Set(userIds.rows.map((r) => r.id));
     validUserIds.add(SEED_DEFAULT_USER_ID);
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Build rows in-memory (9 params each)
+    const rows: unknown[][] = [];
     let skippedNullId = 0;
     let skippedMissingInvoice = 0;
     let skippedMissingRequired = 0;
 
+    for (const r of result.recordset) {
+      const id = intOrNull(r.id);
+      const serviceInvoiceId = intOrNull(r.serviceInvoiceId);
+      const paidAmount = numericOrNull(r.paidAmount);
+      const paidAt = asString(r.paidAt);
+
+      if (id == null) { skippedNullId++; continue; }
+      if (serviceInvoiceId == null || !validInvoiceIds.has(serviceInvoiceId)) { skippedMissingInvoice++; continue; }
+      if (paidAmount == null || !paidAt) { skippedMissingRequired++; continue; }
+
+      const updatedAt = asString(r.updatedAt);
+      rows.push([
+        id,
+        serviceInvoiceId,
+        Number(paidAmount).toFixed(3),
+        paidAt,
+        boolOrTrue(r.isActive),
+        asString(r.createdAt),
+        resolveAuditUserId(intOrNull(r.createdBy), validUserIds),
+        updatedAt,
+        resolveAuditUserIdIfTimestamp(updatedAt, intOrNull(r.updatedBy), validUserIds),
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-
-      for (const r of result.recordset) {
-        const id = intOrNull(r.id);
-        const serviceInvoiceId = intOrNull(r.serviceInvoiceId);
-        const paidAmount = numericOrNull(r.paidAmount);
-        const paidAt = asString(r.paidAt);
-
-        if (id == null) {
-          skippedNullId++;
-          continue;
-        }
-        if (serviceInvoiceId == null || !validInvoiceIds.has(serviceInvoiceId)) {
-          skippedMissingInvoice++;
-          continue;
-        }
-        if (paidAmount == null || !paidAt) {
-          skippedMissingRequired++;
-          continue;
-        }
-
-        const createdBy = resolveAuditUserId(
-          intOrNull(r.createdBy),
-          validUserIds,
-        );
-        const updatedAt = asString(r.updatedAt);
-        const updatedBy = resolveAuditUserIdIfTimestamp(
-          updatedAt,
-          intOrNull(r.updatedBy),
-          validUserIds,
-        );
-
-        await client.query(UPSERT_SQL, [
-          id,
-          serviceInvoiceId,
-          Number(paidAmount).toFixed(3),
-          paidAt,
-          boolOrTrue(r.isActive),
-          asString(r.createdAt),
-          createdBy,
-          updatedAt,
-          updatedBy,
-        ]);
-        upserted++;
-      }
-
-      const backfill = await client.query(
-        BACKFILL_SERVICE_INVOICE_PAYMENT_AGGREGATES_SQL,
-      );
+      await upsertBatched(client, "service_invoice_payment_logs", HEAD_SQL, TAIL_SQL, rows);
+      const backfill = await client.query(BACKFILL_SERVICE_INVOICE_PAYMENT_AGGREGATES_SQL);
       await client.query("COMMIT");
 
       console.log(
-        `Upserted ${upserted} service_invoice_payment_logs rows ` +
+        `Upserted ${rows.length} service_invoice_payment_logs rows ` +
           `(${skippedNullId} skipped: null id, ` +
           `${skippedMissingInvoice} skipped: invoice not in Postgres, ` +
           `${skippedMissingRequired} skipped: missing paid amount/date).`,

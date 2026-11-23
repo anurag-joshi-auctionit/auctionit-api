@@ -82,8 +82,8 @@ ON CONFLICT (id) DO UPDATE SET
   updated_by = EXCLUDED.updated_by
 `;
 
-/** Rows per chunked insert inside one MSSQL page. */
-const CHUNK_SIZE = 2000;
+/** Rows per chunked insert inside one MSSQL page. JSON has no bind-param limit. */
+const CHUNK_SIZE = 5000;
 
 type MapRow = {
   id: number;

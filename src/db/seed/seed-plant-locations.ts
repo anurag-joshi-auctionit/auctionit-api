@@ -5,6 +5,7 @@ import {
     resolveAuditUserIdIfTimestamp,
     SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 import {
     asString,
@@ -50,20 +51,16 @@ SELECT
 FROM tbl_Config_PlantLocation
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO plant_locations (
   id, client_id, name, address, country, state, city, location_id, pincode, is_active,
   poc_name, poc_email, poc_phone,
   billing_name, billing_email_to, billing_email_cc,
   grace_period, gstin, pan, order_number, order_date, kam_id,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-  $11, $12, $13,
-  $14, $15, $16,
-  $17, $18, $19, $20, $21, $22,
-  $23, $24, $25, $26
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   client_id = EXCLUDED.client_id,
   name = EXCLUDED.name,
@@ -170,8 +167,8 @@ async function main() {
         let kamAssigned = 0;
         let kamSkipped = 0;
 
-        const client = await pgPool.connect();
-        let upserted = 0;
+        // Build rows in-memory (26 params each)
+        const rows: unknown[][] = [];
         let skippedClient = 0;
         let defaultedCreatedBy = 0;
         let unresolvedLocation = 0;
@@ -183,88 +180,78 @@ async function main() {
             city: string | null;
         }> = [];
 
+        for (const r of result.recordset) {
+            const clientId = r.clientId == null ? null : Number(r.clientId);
+            if (clientId == null || !clientIds.has(clientId)) {
+                skippedClient++;
+                continue;
+            }
+
+            const createdByRaw = r.createdBy == null ? null : Number(r.createdBy);
+            const createdBy = resolveAuditUserId(createdByRaw, userIds);
+            if (createdByRaw !== createdBy) defaultedCreatedBy++;
+
+            const resolved = resolveLocationId(locationMap, r.country, r.state, r.city);
+            if (resolved.locationId == null && resolved.state && resolved.city) {
+                unresolvedLocation++;
+                unmatchedLocations.push({
+                    id: r.locationId,
+                    clientId,
+                    country: resolved.country,
+                    state: resolved.state,
+                    city: resolved.city,
+                });
+            } else if (resolved.locationId == null) {
+                unresolvedLocation++;
+            }
+
+            const kamCandidate = clientKamMap.get(clientId);
+            const kamId =
+                kamCandidate != null && userIds.has(Number(kamCandidate))
+                    ? Number(kamCandidate)
+                    : null;
+            if (kamId != null) {
+                kamAssigned++;
+            } else if (kamCandidate != null) {
+                kamSkipped++;
+            }
+
+            const updatedByRaw = r.updatedBy == null ? null : Number(r.updatedBy);
+
+            rows.push([
+                Number(r.locationId),
+                clientId,
+                asString(r.locationName),
+                asString(r.address),
+                asString(r.country),
+                asString(r.state),
+                asString(r.city),
+                resolved.locationId,
+                normalizePincode(r.pincode),
+                Boolean(r.isActive),
+                asString(r.pocName),
+                asString(r.pocEmail),
+                asString(r.pocPhone),
+                asString(r.billingName),
+                asString(r.billingEmailTo),
+                asString(r.billingEmailCc),
+                r.gracePeriod,
+                normalizeGstin(r.gstin),
+                normalizePan(r.pan),
+                asString(r.orderNumber),
+                r.orderDate,
+                kamId,
+                r.createdAt,
+                createdBy,
+                r.updatedAt,
+                resolveAuditUserIdIfTimestamp(r.updatedAt, updatedByRaw, userIds),
+            ]);
+        }
+
+        const client = await pgPool.connect();
         try {
             await client.query("BEGIN");
-            for (const r of result.recordset) {
-                const clientId =
-                    r.clientId == null ? null : Number(r.clientId);
-                if (clientId == null || !clientIds.has(clientId)) {
-                    skippedClient++;
-                    continue;
-                }
-
-                const createdByRaw =
-                    r.createdBy == null ? null : Number(r.createdBy);
-                const createdBy = resolveAuditUserId(createdByRaw, userIds);
-                if (createdByRaw !== createdBy) defaultedCreatedBy++;
-
-                const resolved = resolveLocationId(
-                    locationMap,
-                    r.country,
-                    r.state,
-                    r.city,
-                );
-                if (resolved.locationId == null && resolved.state && resolved.city) {
-                    unresolvedLocation++;
-                    unmatchedLocations.push({
-                        id: r.locationId,
-                        clientId,
-                        country: resolved.country,
-                        state: resolved.state,
-                        city: resolved.city,
-                    });
-                } else if (resolved.locationId == null) {
-                    unresolvedLocation++;
-                }
-
-                const kamCandidate = clientKamMap.get(clientId);
-                const kamId =
-                    kamCandidate != null && userIds.has(Number(kamCandidate))
-                        ? Number(kamCandidate)
-                        : null;
-                if (kamId != null) {
-                    kamAssigned++;
-                } else if (kamCandidate != null) {
-                    kamSkipped++;
-                }
-
-                const updatedByRaw =
-                    r.updatedBy == null ? null : Number(r.updatedBy);
-
-                await client.query(UPSERT_SQL, [
-                    Number(r.locationId),
-                    clientId,
-                    asString(r.locationName),
-                    asString(r.address),
-                    asString(r.country),
-                    asString(r.state),
-                    asString(r.city),
-                    resolved.locationId,
-                    normalizePincode(r.pincode),
-                    Boolean(r.isActive),
-                    asString(r.pocName),
-                    asString(r.pocEmail),
-                    asString(r.pocPhone),
-                    asString(r.billingName),
-                    asString(r.billingEmailTo),
-                    asString(r.billingEmailCc),
-                    r.gracePeriod,
-                    normalizeGstin(r.gstin),
-                    normalizePan(r.pan),
-                    asString(r.orderNumber),
-                    r.orderDate,
-                    kamId,
-                    r.createdAt,
-                    createdBy,
-                    r.updatedAt,
-                    resolveAuditUserIdIfTimestamp(
-                        r.updatedAt,
-                        updatedByRaw,
-                        userIds,
-                    ),
-                ]);
-                upserted++;
-            }
+            await upsertBatched(client, "plant_locations", HEAD_SQL, TAIL_SQL, rows);
             await client.query("COMMIT");
         } catch (err) {
             await client.query("ROLLBACK");
@@ -274,7 +261,7 @@ async function main() {
         }
 
         console.log(
-            `Upserted ${upserted} rows into plant_locations ` +
+            `Upserted ${rows.length} rows into plant_locations ` +
                 `(${skippedClient} skipped missing client, ` +
                 `defaulted created_by to 1 on ${defaultedCreatedBy} rows, ` +
                 `${unresolvedLocation} without resolved location_id, ` +

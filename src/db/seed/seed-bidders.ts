@@ -5,8 +5,10 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { buildBidderVan } from "../../lib/bidders/van.js";
 import { connectMssql } from "./mssql.js";
+import { loadLocationLookupMap, resolveLocationId } from "./resolve-location-id.js";
 
 const SOURCE_SQL = `
 SELECT
@@ -31,7 +33,7 @@ SELECT
 FROM tbl_Config_BidderCompanyMst
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO bidders (
   id, company_name, address, location_id,
   country, state, city, pincode,
@@ -40,21 +42,9 @@ INSERT INTO bidders (
   is_active, is_verified, valid_from, valid_to,
   van,
   created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3,
-  (
-    SELECT id FROM locations
-    WHERE country = COALESCE(NULLIF($4, ''), 'India')
-      AND state = $5
-      AND city = $6
-  ),
-  $4, $5, $6, $7,
-  $8,
-  $9, $10,
-  $11, $12, $13, $14,
-  $15,
-  $16, $17, $18, $19
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   company_name = EXCLUDED.company_name,
   address = EXCLUDED.address,
@@ -140,62 +130,62 @@ async function main() {
       return;
     }
 
-    const userIdsResult = await pgPool.query<{ id: number }>(
-      "SELECT id FROM users",
-    );
+    const [userIdsResult, locationMap] = await Promise.all([
+      pgPool.query<{ id: number }>("SELECT id FROM users"),
+      loadLocationLookupMap(pgPool),
+    ]);
     const validUserIds = new Set(userIdsResult.rows.map((r) => r.id));
     validUserIds.add(SEED_DEFAULT_USER_ID);
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Build rows in-memory (20 params each — location_id resolved from map)
+    const rows: unknown[][] = [];
     let skippedLocation = 0;
     let defaultedCreatedBy = 0;
     let defaultedUpdatedBy = 0;
+
+    for (const r of result.recordset) {
+      const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
+      if (r.createdBy !== createdBy) defaultedCreatedBy++;
+      const updatedBy = resolveAuditUserIdIfTimestamp(r.updatedAt, r.updatedBy, validUserIds);
+      if (r.updatedAt != null && (r.updatedBy == null || r.updatedBy !== updatedBy)) {
+        defaultedUpdatedBy++;
+      }
+
+      const country = asString(r.country) ?? "India";
+      const state = asString(r.state);
+      const city = asString(r.city);
+      if (!state || !city) skippedLocation++;
+
+      const resolved = resolveLocationId(locationMap, r.country, r.state, r.city);
+
+      rows.push([
+        r.bidderId,
+        r.companyName,
+        asString(r.address),
+        resolved.locationId,
+        country,
+        state,
+        city,
+        normalizePincode(r.pincode),
+        asString(r.website),
+        normalizePan(r.pan),
+        normalizeGstin(r.gstin),
+        Boolean(r.isActive),
+        Boolean(r.isVerified),
+        r.validFrom,
+        r.validTo,
+        buildBidderVan(Number(r.bidderId)),
+        r.createdAt,
+        createdBy,
+        r.updatedAt,
+        updatedBy,
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
-        if (r.createdBy !== createdBy) defaultedCreatedBy++;
-        const updatedBy = resolveAuditUserIdIfTimestamp(
-          r.updatedAt,
-          r.updatedBy,
-          validUserIds,
-        );
-        if (
-          r.updatedAt != null &&
-          (r.updatedBy == null || r.updatedBy !== updatedBy)
-        ) {
-          defaultedUpdatedBy++;
-        }
-
-        const country = asString(r.country) ?? "India";
-        const state = asString(r.state);
-        const city = asString(r.city);
-        if (!state || !city) skippedLocation++;
-
-        await client.query(UPSERT_SQL, [
-          r.bidderId,
-          r.companyName,
-          asString(r.address),
-          country,
-          state,
-          city,
-          normalizePincode(r.pincode),
-          asString(r.website),
-          normalizePan(r.pan),
-          normalizeGstin(r.gstin),
-          Boolean(r.isActive),
-          Boolean(r.isVerified),
-          r.validFrom,
-          r.validTo,
-          buildBidderVan(Number(r.bidderId)),
-          r.createdAt,
-          createdBy,
-          r.updatedAt,
-          updatedBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "bidders", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -204,7 +194,7 @@ async function main() {
       client.release();
     }
     console.log(
-      `Upserted ${upserted} rows into bidders ` +
+      `Upserted ${rows.length} rows into bidders ` +
         `(defaulted created_by to 1 on ${defaultedCreatedBy} rows, ` +
         `defaulted updated_by to 1 on ${defaultedUpdatedBy} rows, ` +
         `${skippedLocation} without city/state for location lookup) ` +

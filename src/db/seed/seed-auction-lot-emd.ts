@@ -5,6 +5,7 @@ import {
   resolveAuditUserIdIfTimestamp,
   SEED_DEFAULT_USER_ID,
 } from "./audit-user.js";
+import { upsertBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 
 const SOURCE_SQL = `
@@ -23,14 +24,13 @@ FROM tbl_Config_AuctionLotEMD
 ORDER BY LotEMDId
 `;
 
-const UPSERT_SQL = `
+const HEAD_SQL = `
 INSERT INTO auction_lot_emd_ranges (
   id, auction_id, lot_display_order_from, lot_display_order_to, emd_amount,
   display_order, created_at, created_by, updated_at, updated_by
-) VALUES (
-  $1, $2, $3, $4, $5,
-  $6, $7, $8, $9, $10
-)
+)`;
+
+const TAIL_SQL = `
 ON CONFLICT (id) DO UPDATE SET
   auction_id = EXCLUDED.auction_id,
   lot_display_order_from = EXCLUDED.lot_display_order_from,
@@ -58,38 +58,33 @@ async function main() {
     const validUserIds = new Set(userIds.rows.map((r) => r.id));
     validUserIds.add(SEED_DEFAULT_USER_ID);
 
-    const client = await pgPool.connect();
-    let upserted = 0;
+    // Build rows in-memory (10 params each)
+    const rows: unknown[][] = [];
     let skippedMissingAuction = 0;
 
+    for (const r of result.recordset) {
+      if (!validAuctionIds.has(r.auctionId)) {
+        skippedMissingAuction++;
+        continue;
+      }
+      rows.push([
+        r.id,
+        r.auctionId,
+        String(r.lotDisplayOrderFrom),
+        String(r.lotDisplayOrderTo),
+        String(r.emdAmount),
+        r.displayOrder,
+        r.createdAt,
+        resolveAuditUserId(r.createdBy, validUserIds),
+        r.updatedAt,
+        resolveAuditUserIdIfTimestamp(r.updatedAt, r.updatedBy, validUserIds),
+      ]);
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        if (!validAuctionIds.has(r.auctionId)) {
-          skippedMissingAuction++;
-          continue;
-        }
-        const createdBy = resolveAuditUserId(r.createdBy, validUserIds);
-        const updatedBy = resolveAuditUserIdIfTimestamp(
-          r.updatedAt,
-          r.updatedBy,
-          validUserIds,
-        );
-
-        await client.query(UPSERT_SQL, [
-          r.id,
-          r.auctionId,
-          String(r.lotDisplayOrderFrom),
-          String(r.lotDisplayOrderTo),
-          String(r.emdAmount),
-          r.displayOrder,
-          r.createdAt,
-          createdBy,
-          r.updatedAt,
-          updatedBy,
-        ]);
-        upserted++;
-      }
+      await upsertBatched(client, "auction_lot_emd_ranges", HEAD_SQL, TAIL_SQL, rows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -99,7 +94,7 @@ async function main() {
     }
 
     console.log(
-      `Upserted ${upserted} auction_lot_emd_ranges ` +
+      `Upserted ${rows.length} auction_lot_emd_ranges ` +
         `(${skippedMissingAuction} skipped: auction not in Postgres) ` +
         `in ${Date.now() - started}ms.`,
     );

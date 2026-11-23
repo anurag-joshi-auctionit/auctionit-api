@@ -1,5 +1,6 @@
 import pg from "pg";
 import { env } from "../../env.js";
+import { updateBatched } from "./batch-write.js";
 import { connectMssql } from "./mssql.js";
 
 const SOURCE_SQL = `
@@ -10,7 +11,10 @@ FROM tbl_Config_BidderCompUser
 `;
 
 const UPDATE_SQL = `
-UPDATE users SET bidder_id = $2 WHERE id = $1
+UPDATE users
+SET bidder_id = r.bidder_id::int
+FROM json_to_recordset($1::json) AS r(user_id int, bidder_id int)
+WHERE users.id = r.user_id
 `;
 
 type SourceRow = {
@@ -40,39 +44,27 @@ async function main() {
     const validUserIds = new Set(userRows.rows.map((r) => r.id));
     const validBidderIds = new Set(bidderRows.rows.map((r) => r.id));
 
-    const client = await pgPool.connect();
-    let updated = 0;
+    // De-duplicate in memory (1:1 mapping enforced by schema)
     let skippedMissingUser = 0;
     let skippedMissingBidder = 0;
     let skippedDuplicate = 0;
-
-    // The schema enforces a strict 1:1 mapping (bidder_id unique on users).
-    // The legacy composite-key table can in theory hold duplicates, so keep
-    // only the first occurrence of each user_id / bidder_id.
     const seenUserIds = new Set<number>();
     const seenBidderIds = new Set<number>();
+    const updateRows: { user_id: number; bidder_id: number }[] = [];
 
+    for (const r of result.recordset) {
+      if (!validUserIds.has(r.userId)) { skippedMissingUser++; continue; }
+      if (!validBidderIds.has(r.bidderId)) { skippedMissingBidder++; continue; }
+      if (seenUserIds.has(r.userId) || seenBidderIds.has(r.bidderId)) { skippedDuplicate++; continue; }
+      seenUserIds.add(r.userId);
+      seenBidderIds.add(r.bidderId);
+      updateRows.push({ user_id: r.userId, bidder_id: r.bidderId });
+    }
+
+    const client = await pgPool.connect();
     try {
       await client.query("BEGIN");
-      for (const r of result.recordset) {
-        if (!validUserIds.has(r.userId)) {
-          skippedMissingUser++;
-          continue;
-        }
-        if (!validBidderIds.has(r.bidderId)) {
-          skippedMissingBidder++;
-          continue;
-        }
-        if (seenUserIds.has(r.userId) || seenBidderIds.has(r.bidderId)) {
-          skippedDuplicate++;
-          continue;
-        }
-        seenUserIds.add(r.userId);
-        seenBidderIds.add(r.bidderId);
-
-        await client.query(UPDATE_SQL, [r.userId, r.bidderId]);
-        updated++;
-      }
+      await updateBatched(client, "users.bidder_id", UPDATE_SQL, updateRows);
       await client.query("COMMIT");
     } catch (err) {
       await client.query("ROLLBACK");
@@ -82,7 +74,7 @@ async function main() {
     }
 
     console.log(
-      `Updated bidder_id on ${updated} users ` +
+      `Updated bidder_id on ${updateRows.length} users ` +
         `(${skippedMissingUser} skipped: user not in Postgres, ` +
         `${skippedMissingBidder} skipped: bidder not in Postgres, ` +
         `${skippedDuplicate} skipped: duplicate user/bidder) ` +

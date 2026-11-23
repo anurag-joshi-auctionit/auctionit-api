@@ -28,6 +28,10 @@ CLEAN_MODE=""
 SEED_MODE="all"
 # Optional R2 bucket override for the file phase (e.g. auctionit-staging).
 R2_BUCKET_OVERRIDE=""
+# Run only this specific phase: A | B | C | R2 (empty = all applicable)
+PHASE_ONLY=""
+# Skip phases before this one: A | B | C | R2 (empty = no skip)
+FROM_PHASE=""
 SEED_WARNINGS=0
 SEED_FAILURES=0
 
@@ -39,22 +43,27 @@ Run database seeds in dependency order. By default runs the DB phases
 (A → C) followed by the file/document upload phase (R2).
 
 Options:
-  --db-only     Run DB phases (A–C) only; skip file/document R2 uploads
-  --files-only  Run only file/document uploads to R2 (bidder + auction + SI docs)
-  --clean       Dry-run clean (prints row counts, deletes nothing)
-  --clean-yes   Truncate default seed tables, then run seeds
-  --r2-bucket <name>  Upload files to this R2 bucket (overrides R2_BUCKET),
-                      e.g. auctionit-local or auctionit-staging
-  -h, --help    Show this help
+  --db-only           Run DB phases (A–C) only; skip file/document R2 uploads
+  --files-only        Run only file/document uploads to R2
+  --phase <A|B|C|R2>  Run only this single phase
+  --from-phase <A|B|C|R2>
+                      Start from this phase and run everything after it
+                      (e.g. --from-phase B  runs B → C → R2)
+  --clean             Dry-run clean (prints row counts, deletes nothing)
+  --clean-yes         Truncate default seed tables, then run seeds
+  --r2-bucket <name>  Upload files to this R2 bucket (overrides R2_BUCKET)
+  -h, --help          Show this help
 
-Phase A (Postgres-only): no MSSQL required.
-Phases B–C: require MSSQL_SERVER / MSSQL_PORT / MSSQL_USER / MSSQL_PASSWORD / MSSQL_DATABASE.
-Phase R2: requires MSSQL_* (above) plus R2 credentials.
+Phases:
+  A   Postgres-only reference data (no MSSQL required)
+  B   MSSQL → Postgres core entities
+  C   MSSQL → Postgres dependent data (needs A + B)
+  R2  File/document uploads to R2 (needs B + C, and R2 credentials)
 
 Notes:
   --db-only and --files-only are mutually exclusive.
-  --clean / --clean-yes are ignored with --files-only (no tables to truncate).
-  Run the DB phases before --files-only so bidders/auctions exist for the uploads.
+  --phase and --from-phase are mutually exclusive.
+  --clean / --clean-yes only apply to phases that touch DB tables.
 
 Status markers (printed after each seed):
   ✅  every pulled row upserted — nothing skipped
@@ -71,6 +80,28 @@ while [[ $# -gt 0 ]]; do
       ;;
     --files-only)
       SEED_MODE="files"
+      shift
+      ;;
+    --phase)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--phase requires A, B, C, or R2" >&2; exit 1
+      fi
+      PHASE_ONLY="$(echo "$2" | tr '[:lower:]' '[:upper:]')"
+      shift 2
+      ;;
+    --phase=*)
+      PHASE_ONLY="$(echo "${1#*=}" | tr '[:lower:]' '[:upper:]')"
+      shift
+      ;;
+    --from-phase)
+      if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "--from-phase requires A, B, C, or R2" >&2; exit 1
+      fi
+      FROM_PHASE="$(echo "$2" | tr '[:lower:]' '[:upper:]')"
+      shift 2
+      ;;
+    --from-phase=*)
+      FROM_PHASE="$(echo "${1#*=}" | tr '[:lower:]' '[:upper:]')"
       shift
       ;;
     --clean)
@@ -104,6 +135,39 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Validate phase flags
+if [[ -n "$PHASE_ONLY" && -n "$FROM_PHASE" ]]; then
+  echo "Error: --phase and --from-phase are mutually exclusive." >&2; exit 1
+fi
+for _p in "$PHASE_ONLY" "$FROM_PHASE"; do
+  if [[ -n "$_p" && "$_p" != "A" && "$_p" != "B" && "$_p" != "C" && "$_p" != "R2" ]]; then
+    echo "Error: phase must be A, B, C, or R2 (got: $_p)" >&2; exit 1
+  fi
+done
+
+# Derive which phases are active
+# phase_enabled <phase> → returns 0 (true) if this phase should run
+phase_enabled() {
+  local phase="$1"
+  # --phase X: only that phase
+  if [[ -n "$PHASE_ONLY" ]]; then
+    [[ "$phase" == "$PHASE_ONLY" ]]
+    return
+  fi
+  # --from-phase X: skip phases before X
+  if [[ -n "$FROM_PHASE" ]]; then
+    case "$FROM_PHASE" in
+      A)  true ;;
+      B)  [[ "$phase" != "A" ]] ;;
+      C)  [[ "$phase" == "C" || "$phase" == "R2" ]] ;;
+      R2) [[ "$phase" == "R2" ]] ;;
+    esac
+    return
+  fi
+  # Default: everything (filtered by SEED_MODE below)
+  true
+}
 
 if [[ -n "$R2_BUCKET_OVERRIDE" ]]; then
   export R2_BUCKET="$R2_BUCKET_OVERRIDE"
@@ -193,7 +257,7 @@ run() {
   rm -f "$tmp"
 }
 
-run_db_phases() {
+run_phase_a() {
   if [[ "$CLEAN_MODE" == "dry-run" ]]; then
     run clean:db
   elif [[ "$CLEAN_MODE" == "yes" ]]; then
@@ -215,7 +279,9 @@ run_db_phases() {
   run seed:auction-document-types
   run seed:service-invoice-document-types
   run seed:subscription-document-types
+}
 
+run_phase_b() {
   echo ""
   echo "=== Phase B — MSSQL → Postgres core ==="
   # Always after seed:roles (+ seed:permissions): remaps role_id from MSSQL flags
@@ -244,7 +310,9 @@ run_db_phases() {
   run seed:payment-types
   run seed:subscriptions
   run seed:subscription-payment-requests
+}
 
+run_phase_c() {
   echo ""
   echo "=== Phase C — MSSQL → Postgres dependent ==="
 
@@ -268,7 +336,7 @@ run_db_phases() {
   run emd:verify-holds
 }
 
-run_files_phase() {
+run_phase_r2() {
   echo ""
   echo "=== Phase R2 — file/document uploads to R2 ==="
 
@@ -280,18 +348,24 @@ run_files_phase() {
   run seed:subscription-documents
 }
 
-case "$SEED_MODE" in
-  db)
-    run_db_phases
-    ;;
-  files)
-    run_files_phase
-    ;;
-  all)
-    run_db_phases
-    run_files_phase
-    ;;
-esac
+# --files-only maps to R2 only; override PHASE_ONLY for clean dispatch
+if [[ "$SEED_MODE" == "files" ]]; then
+  PHASE_ONLY="R2"
+fi
+
+# Dispatch: run whichever phases are enabled, respecting SEED_MODE
+run_enabled_phases() {
+  if [[ "$SEED_MODE" != "files" ]]; then
+    phase_enabled A && run_phase_a
+    phase_enabled B && run_phase_b
+    phase_enabled C && run_phase_c
+  fi
+  if [[ "$SEED_MODE" != "db" ]]; then
+    phase_enabled R2 && run_phase_r2
+  fi
+}
+
+run_enabled_phases
 
 echo ""
 if [[ "$SEED_WARNINGS" -gt 0 ]]; then
