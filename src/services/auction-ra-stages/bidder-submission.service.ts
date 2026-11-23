@@ -9,7 +9,7 @@ import {
   auctionRaStageResponses,
 } from "../../db/schema/auction-ra-stage-responses.js";
 import { AUCTION_RA_STAGE_KEYS, type AuctionRaStageKey } from "../../db/schema/question-templates.js";
-import { filesService } from "../files.service.js";
+import { filesService, type FileListItem } from "../files.service.js";
 import { earliestEnabledStageKey, questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
 
@@ -259,6 +259,31 @@ export const bidderRaStageSubmissionService = {
       }
     }
 
+    // Upload files to R2 + files table before the transaction so the
+    // transaction body is DB-only. Calling filesService.upload() (which uses
+    // the global db) from inside db.transaction() would use a separate pool
+    // connection while the transaction holds one, risking pool starvation.
+    const uploadedByQuestionId = new Map<string, FileListItem[]>();
+    for (const q of questionRows) {
+      if (q.answerType !== "file_upload") continue;
+      const qid = String(q.id);
+      const uploads = filesByQuestionId.get(qid) ?? [];
+      if (uploads.length === 0) continue;
+      uploadedByQuestionId.set(
+        qid,
+        await Promise.all(
+          uploads.map((f) =>
+            filesService.upload({
+              userId,
+              filename: f.filename,
+              contentType: f.mimetype,
+              body: f.buffer,
+            }),
+          ),
+        ),
+      );
+    }
+
     const now = formatUtcNow();
     await db.transaction(async (tx) => {
       await tx
@@ -268,18 +293,8 @@ export const bidderRaStageSubmissionService = {
       for (const q of questionRows) {
         const qid = String(q.id);
         if (q.answerType === "file_upload") {
-          const uploads = filesByQuestionId.get(qid) ?? [];
-          if (uploads.length === 0) continue;
-          const uploaded = await Promise.all(
-            uploads.map((f) =>
-              filesService.upload({
-                userId,
-                filename: f.filename,
-                contentType: f.mimetype,
-                body: f.buffer,
-              }),
-            ),
-          );
+          const uploaded = uploadedByQuestionId.get(qid) ?? [];
+          if (uploaded.length === 0) continue;
           await tx.insert(auctionRaStageAnswers).values({
             responseId: row.responseId,
             stageQuestionId: q.id,

@@ -36,3 +36,31 @@ export function singleMemoryUpload(
     });
   };
 }
+
+/**
+ * Wraps `upload.any()` so Multer `LIMIT_FILE_SIZE` returns 400 with a
+ * domain message instead of falling through to the generic 500 handler.
+ */
+export function anyMemoryUpload(
+  upload: multer.Multer,
+  tooLargeMessage: string,
+): RequestHandler {
+  const middleware = upload.any();
+  return (req: Request, res: Response, next: NextFunction) => {
+    middleware(req, res, (err: unknown) => {
+      if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+        const fieldName = err.field ?? "file";
+        res
+          .status(400)
+          .json(
+            fieldValidationErrorBody(
+              { [fieldName]: [tooLargeMessage] },
+              tooLargeMessage,
+            ),
+          );
+        return;
+      }
+      next(err);
+    });
+  };
+}

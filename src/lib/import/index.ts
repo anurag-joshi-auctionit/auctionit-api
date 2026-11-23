@@ -13,6 +13,7 @@ export { createPdfUpload, isPdfFile, PDF_MIME } from "./multer-pdf.js";
 export {
   createMemoryUpload,
   singleMemoryUpload,
+  anyMemoryUpload,
 } from "./multer-memory.js";
 export {
   clampPercent,

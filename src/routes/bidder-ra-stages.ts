@@ -1,7 +1,8 @@
 import { Router, type Response } from "express";
-import multer from "multer";
+import { BidderRaStagesValidationMessages } from "@auctionit/messages/bidder-ra-stages";
 import { requireAuth, requirePortalRole } from "../auth/middleware.js";
 import { AUCTION_RA_STAGE_KEYS, type AuctionRaStageKey } from "../db/schema/question-templates.js";
+import { anyMemoryUpload, createMemoryUpload } from "../lib/import/index.js";
 import { bidderRaStageSubmissionService } from "../services/auction-ra-stages/bidder-submission.service.js";
 import { AuctionRaStageValidationError } from "../services/auction-ra-stages/errors.js";
 
@@ -9,7 +10,8 @@ const router = Router();
 
 router.use(requireAuth, requirePortalRole("bidder"));
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const upload = createMemoryUpload({ maxBytes: 20 * 1024 * 1024 });
+const uploadAny = anyMemoryUpload(upload, BidderRaStagesValidationMessages.FILE_TOO_LARGE);
 
 function bidderIdOf(req: import("express").Request): number | null {
   return req.user?.bidderId ?? null;
@@ -67,7 +69,7 @@ router.get("/auctions/:auctionId/:stageKey", async (req, res, next) => {
   }
 });
 
-router.post("/auctions/:auctionId/:stageKey/submit", upload.any(), async (req, res, next) => {
+router.post("/auctions/:auctionId/:stageKey/submit", uploadAny, async (req, res, next) => {
   const auctionId = parseAuctionId(req.params.auctionId);
   const stageKey = parseStageKey(req.params.stageKey);
   const bidderId = bidderIdOf(req);
