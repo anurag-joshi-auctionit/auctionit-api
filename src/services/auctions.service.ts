@@ -3587,10 +3587,9 @@ export class AuctionsService {
         userId,
       });
     } catch (err) {
-      if (err instanceof Error) {
-        throw new AuctionValidationError(err.message);
-      }
-      throw err;
+      const message =
+        err instanceof Error ? err.message : String(err);
+      throw new AuctionValidationError(message || "Upload failed");
     }
   }
 
