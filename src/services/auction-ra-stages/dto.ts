@@ -1,7 +1,8 @@
 import { formatUtcNow } from "@auctionit/lib/date";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { auctionRaStageQuestions, auctionRaStages } from "../../db/schema/auction-ra-stages.js";
+import { auctionRaStageResponses } from "../../db/schema/auction-ra-stage-responses.js";
 import {
   AUCTION_RA_STAGE_KEYS,
   type AuctionRaStageKey,
@@ -48,8 +49,18 @@ export function questionRowToDto(
   };
 }
 
-export function isStageLocked(status: string): boolean {
-  return status !== "draft";
+export async function isStageLocked(stageId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ id: auctionRaStageResponses.id })
+    .from(auctionRaStageResponses)
+    .where(
+      and(
+        eq(auctionRaStageResponses.auctionRaStageId, stageId),
+        eq(auctionRaStageResponses.status, "submitted"),
+      ),
+    )
+    .limit(1);
+  return !!row;
 }
 
 /** Creates any missing rfi/rfp/rfq rows for the auction, then returns all three. */

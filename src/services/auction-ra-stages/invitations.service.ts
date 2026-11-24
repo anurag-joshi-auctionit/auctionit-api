@@ -204,19 +204,21 @@ export const auctionRaStagesInvitationsService = {
         .limit(1);
       if (existing) continue;
 
-      await db.insert(auctionRaStageInvitedBidders).values({
-        auctionId,
-        bidderId: bidderRow.id,
-        entryStage: input.entryStage ?? null,
-        invitedBy: userId,
-        invitedAt: now,
-      });
+      await db.transaction(async (tx) => {
+        await tx.insert(auctionRaStageInvitedBidders).values({
+          auctionId,
+          bidderId: bidderRow.id,
+          entryStage: entryStage,
+          invitedBy: userId,
+          invitedAt: now,
+        });
 
-      await db.insert(auctionRaStageResponses).values({
-        auctionRaStageId: entryStageRow.id,
-        bidderId: bidderRow.id,
-        status: "invited",
-        createdAt: now,
+        await tx.insert(auctionRaStageResponses).values({
+          auctionRaStageId: entryStageRow.id,
+          bidderId: bidderRow.id,
+          status: "invited",
+          createdAt: now,
+        });
       });
 
       const email = emailByBidderId.get(bidderRow.id);

@@ -22,9 +22,8 @@ export const auctionRaStagesConfigService = {
     const now = formatUtcNow();
 
     for (const row of rows) {
-      // Locked (published/closed) stages are left untouched regardless of the
-      // new enabled set — nothing time-based can be undone once it started.
-      if (isStageLocked(row.status)) continue;
+      // Stages are locked once a bidder has submitted — skip those.
+      if (await isStageLocked(row.id)) continue;
 
       const enabled = input.enabledKeys.includes(row.stageKey);
       if (enabled === row.enabled) continue;

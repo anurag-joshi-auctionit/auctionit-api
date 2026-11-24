@@ -1,6 +1,6 @@
 import { BidderRaStagesErrorMessages, BidderRaStagesValidationMessages } from "@auctionit/messages/bidder-ra-stages";
 import { formatUtcNow } from "@auctionit/lib/date";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { auctionRaStageInvitedBidders } from "../../db/schema/auction-ra-stage-invitations.js";
 import { auctionRaStageQuestions, auctionRaStages } from "../../db/schema/auction-ra-stages.js";
@@ -10,12 +10,17 @@ import {
 } from "../../db/schema/auction-ra-stage-responses.js";
 import { AUCTION_RA_STAGE_KEYS, type AuctionRaStageKey } from "../../db/schema/question-templates.js";
 import { filesService, type FileListItem } from "../files.service.js";
-import { earliestEnabledStageKey, questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
+import { questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
 
-export type BidderStageInvitationDto = {
+export type BidderStageListItemDto = {
   stageKey: AuctionRaStageKey;
-  status: "invited" | "submitted";
+  stageStatus: "draft" | "published" | "closed";
+  startsAt: string | null;
+  endsAt: string | null;
+  questionCount: number;
+  requiredQuestionCount: number;
+  responseStatus: "invited" | "submitted" | null;
   isShortlisted: boolean | null;
   rejectionReason: string | null;
 };
@@ -126,30 +131,7 @@ export const bidderRaStageSubmissionService = {
   async listMyInvitations(
     auctionId: number,
     bidderId: number,
-  ): Promise<BidderStageInvitationDto[]> {
-    const rows = await db
-      .select({
-        stageKey: auctionRaStages.stageKey,
-        status: auctionRaStageResponses.status,
-        isShortlisted: auctionRaStageResponses.isShortlisted,
-        rejectionReason: auctionRaStageResponses.rejectionReason,
-      })
-      .from(auctionRaStageResponses)
-      .innerJoin(auctionRaStages, eq(auctionRaStages.id, auctionRaStageResponses.auctionRaStageId))
-      .where(and(eq(auctionRaStages.auctionId, auctionId), eq(auctionRaStageResponses.bidderId, bidderId)));
-
-    if (rows.length > 0) {
-      return rows.map((r) => ({
-        stageKey: r.stageKey,
-        status: r.status,
-        isShortlisted: r.isShortlisted ?? null,
-        rejectionReason: r.rejectionReason ?? null,
-      }));
-    }
-
-    // Fallback: bidder was invited via the invitation table but has no response
-    // rows yet (e.g. invited before row-creation was wired up). Synthesise the
-    // entry-stage invitation so the bidder can see the stage in the app.
+  ): Promise<BidderStageListItemDto[]> {
     const [invitation] = await db
       .select({ entryStage: auctionRaStageInvitedBidders.entryStage })
       .from(auctionRaStageInvitedBidders)
@@ -164,15 +146,76 @@ export const bidderRaStageSubmissionService = {
 
     if (!invitation) return [];
 
-    const stageRows = await db
-      .select({ stageKey: auctionRaStages.stageKey, enabled: auctionRaStages.enabled })
+    const stages = await db
+      .select({
+        id: auctionRaStages.id,
+        stageKey: auctionRaStages.stageKey,
+        status: auctionRaStages.status,
+        startsAt: auctionRaStages.startsAt,
+        endsAt: auctionRaStages.endsAt,
+      })
       .from(auctionRaStages)
-      .where(eq(auctionRaStages.auctionId, auctionId));
+      .where(
+        and(
+          eq(auctionRaStages.auctionId, auctionId),
+          eq(auctionRaStages.enabled, true),
+        ),
+      );
 
-    const entryStageKey = invitation.entryStage ?? earliestEnabledStageKey(stageRows);
-    if (!entryStageKey) return [];
+    if (stages.length === 0) return [];
 
-    return [{ stageKey: entryStageKey, status: "invited", isShortlisted: null, rejectionReason: null }];
+    const stageIds = stages.map((s) => s.id);
+
+    const questionCounts = await db
+      .select({
+        auctionRaStageId: auctionRaStageQuestions.auctionRaStageId,
+        count: sql<number>`count(*)::int`,
+        requiredCount: sql<number>`count(*) filter (where ${auctionRaStageQuestions.required})::int`,
+      })
+      .from(auctionRaStageQuestions)
+      .where(inArray(auctionRaStageQuestions.auctionRaStageId, stageIds))
+      .groupBy(auctionRaStageQuestions.auctionRaStageId);
+
+    const countByStageId = new Map(questionCounts.map((q) => [q.auctionRaStageId, q]));
+
+    const responses = await db
+      .select({
+        stageKey: auctionRaStages.stageKey,
+        status: auctionRaStageResponses.status,
+        isShortlisted: auctionRaStageResponses.isShortlisted,
+        rejectionReason: auctionRaStageResponses.rejectionReason,
+      })
+      .from(auctionRaStageResponses)
+      .innerJoin(auctionRaStages, eq(auctionRaStages.id, auctionRaStageResponses.auctionRaStageId))
+      .where(
+        and(
+          eq(auctionRaStages.auctionId, auctionId),
+          eq(auctionRaStageResponses.bidderId, bidderId),
+        ),
+      );
+
+    const responseByStageKey = new Map(responses.map((r) => [r.stageKey, r]));
+
+    const orderedStages = [...stages].sort(
+      (a, b) =>
+        AUCTION_RA_STAGE_KEYS.indexOf(a.stageKey) - AUCTION_RA_STAGE_KEYS.indexOf(b.stageKey),
+    );
+
+    return orderedStages.map((s) => {
+      const counts = countByStageId.get(s.id);
+      const response = responseByStageKey.get(s.stageKey);
+      return {
+        stageKey: s.stageKey,
+        stageStatus: s.status,
+        startsAt: s.startsAt ?? null,
+        endsAt: s.endsAt ?? null,
+        questionCount: counts?.count ?? 0,
+        requiredQuestionCount: counts?.requiredCount ?? 0,
+        responseStatus: response?.status ?? null,
+        isShortlisted: response?.isShortlisted ?? null,
+        rejectionReason: response?.rejectionReason ?? null,
+      };
+    });
   },
 
   async getMyStage(

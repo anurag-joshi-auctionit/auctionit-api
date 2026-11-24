@@ -27,7 +27,7 @@ export const auctionRaStagesSetupService = {
     const rows = await ensureStagesExist(auctionId);
     const stage = rows.find((r) => r.stageKey === stageKey);
     if (!stage) throw new AuctionRaStageValidationError(AuctionRaStagesErrorMessages.STAGE_NOT_FOUND);
-    if (isStageLocked(stage.status)) {
+    if (await isStageLocked(stage.id)) {
       throw new AuctionRaStageValidationError(AuctionRaStagesErrorMessages.STAGE_LOCKED);
     }
 
@@ -43,9 +43,6 @@ export const auctionRaStagesSetupService = {
       throw new AuctionRaStageValidationError(
         AuctionRaStagesValidationMessages.ENDS_AT_BEFORE_STARTS_AT,
       );
-    }
-    if (startsAt.getTime() <= Date.now()) {
-      throw new AuctionRaStageValidationError(AuctionRaStagesValidationMessages.STARTS_AT_IN_PAST);
     }
 
     const previousKey = previousEnabledStageKey(rows, stageKey);
