@@ -1,5 +1,5 @@
 import { formatUtcNow } from "@auctionit/lib/date";
-import { and, eq, gt, inArray, lte, ne, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, lte, ne, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { auctionRaStages } from "../../db/schema/auction-ra-stages.js";
 import { auctions } from "../../db/schema/auctions.js";
@@ -11,8 +11,8 @@ export type AuctionRaStageLifecycleSyncFilter = {
 export type AuctionRaStageLifecycleSyncResult = {
   resetToDraft: number;
   closedByAuction: number;
-  resetDatesToDraft: number;
   published: number;
+  reopenedClosed: number;
   closed: number;
 };
 
@@ -85,32 +85,29 @@ export async function runRaStageLifecycleSync(
 
   const publishedAuctionIds = auctionsScope(eq(auctions.status, "published"), filter);
 
-  // For published auctions: when an admin pushes dates into the future on a
-  // stage that was already published or closed, reset it back to draft so the
-  // forward transitions below can re-open it at the correct time.
-  const resetDatesToDraft = await db
+  // For published auctions: publish all draft stages immediately — startsAt/endsAt
+  // are the submission window, not a gate on stage visibility.
+  const published = await db
     .update(auctionRaStages)
-    .set({ status: "draft", publishedAt: null, closedAt: null })
+    .set({ status: "published", publishedAt: sql`coalesce(${auctionRaStages.publishedAt}, ${now})` })
     .where(
       and(
         eq(auctionRaStages.enabled, true),
-        or(
-          and(eq(auctionRaStages.status, "published"), gt(auctionRaStages.startsAt, now)),
-          and(eq(auctionRaStages.status, "closed"), gt(auctionRaStages.endsAt, now)),
-        ),
+        eq(auctionRaStages.status, "draft"),
         inArray(auctionRaStages.auctionId, publishedAuctionIds),
       ),
     )
     .returning({ id: auctionRaStages.id });
 
-  const published = await db
+  // Reopen closed stages whose endsAt was edited into the future.
+  const reopenedClosed = await db
     .update(auctionRaStages)
-    .set({ status: "published", publishedAt: now })
+    .set({ status: "published", closedAt: null })
     .where(
       and(
         eq(auctionRaStages.enabled, true),
-        eq(auctionRaStages.status, "draft"),
-        lte(auctionRaStages.startsAt, now),
+        eq(auctionRaStages.status, "closed"),
+        gt(auctionRaStages.endsAt, now),
         inArray(auctionRaStages.auctionId, publishedAuctionIds),
       ),
     )
@@ -132,8 +129,8 @@ export async function runRaStageLifecycleSync(
   return {
     resetToDraft: resetToDraft.length,
     closedByAuction: closedByAuction.length,
-    resetDatesToDraft: resetDatesToDraft.length,
     published: published.length,
+    reopenedClosed: reopenedClosed.length,
     closed: closed.length,
   };
 }

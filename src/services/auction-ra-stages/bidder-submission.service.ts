@@ -269,6 +269,12 @@ export const bidderRaStageSubmissionService = {
     if (row.stageStatus !== "published") {
       throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.STAGE_NOT_OPEN);
     }
+    const nowMs = Date.now();
+    const windowOpen = row.startsAt ? new Date(row.startsAt).getTime() <= nowMs : false;
+    const windowClosed = row.endsAt ? new Date(row.endsAt).getTime() <= nowMs : false;
+    if (!windowOpen || windowClosed) {
+      throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.STAGE_NOT_OPEN);
+    }
 
     const questionRows = await db
       .select()
