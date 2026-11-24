@@ -1,5 +1,5 @@
 import { formatUtcNow } from "@auctionit/lib/date";
-import { and, eq, inArray, lte, ne, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, lte, ne, or, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { auctionRaStages } from "../../db/schema/auction-ra-stages.js";
 import { auctions } from "../../db/schema/auctions.js";
@@ -11,6 +11,7 @@ export type AuctionRaStageLifecycleSyncFilter = {
 export type AuctionRaStageLifecycleSyncResult = {
   resetToDraft: number;
   closedByAuction: number;
+  resetDatesToDraft: number;
   published: number;
   closed: number;
 };
@@ -84,6 +85,24 @@ export async function runRaStageLifecycleSync(
 
   const publishedAuctionIds = auctionsScope(eq(auctions.status, "published"), filter);
 
+  // For published auctions: when an admin pushes dates into the future on a
+  // stage that was already published or closed, reset it back to draft so the
+  // forward transitions below can re-open it at the correct time.
+  const resetDatesToDraft = await db
+    .update(auctionRaStages)
+    .set({ status: "draft", publishedAt: null, closedAt: null })
+    .where(
+      and(
+        eq(auctionRaStages.enabled, true),
+        or(
+          and(eq(auctionRaStages.status, "published"), gt(auctionRaStages.startsAt, now)),
+          and(eq(auctionRaStages.status, "closed"), gt(auctionRaStages.endsAt, now)),
+        ),
+        inArray(auctionRaStages.auctionId, publishedAuctionIds),
+      ),
+    )
+    .returning({ id: auctionRaStages.id });
+
   const published = await db
     .update(auctionRaStages)
     .set({ status: "published", publishedAt: now })
@@ -113,6 +132,7 @@ export async function runRaStageLifecycleSync(
   return {
     resetToDraft: resetToDraft.length,
     closedByAuction: closedByAuction.length,
+    resetDatesToDraft: resetDatesToDraft.length,
     published: published.length,
     closed: closed.length,
   };

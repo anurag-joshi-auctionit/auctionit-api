@@ -15,6 +15,7 @@ import {
   type AuctionRaStagesDto,
 } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
+import { runRaStageLifecycleSync } from "./lifecycle-tick.service.js";
 
 export const auctionRaStagesSetupService = {
   async saveStageSetup(
@@ -108,6 +109,7 @@ export const auctionRaStagesSetupService = {
       }
     });
 
+    await runRaStageLifecycleSync({ auctionId });
     return loadStagesDto(auctionId);
   },
 };
