@@ -22,6 +22,7 @@ export type AuctionRaStageDto = {
   key: AuctionRaStageKey;
   enabled: boolean;
   status: "draft" | "published" | "closed";
+  isLocked: boolean;
   startsAt: string | null;
   endsAt: string | null;
   publishedAt: string | null;
@@ -96,13 +97,29 @@ export async function ensureStagesExist(
 export async function loadStagesDto(auctionId: number): Promise<AuctionRaStagesDto> {
   const rows = await ensureStagesExist(auctionId);
   const ids = rows.map((r) => r.id);
-  const questionRows = ids.length
-    ? await db
-        .select()
-        .from(auctionRaStageQuestions)
-        .where(inArray(auctionRaStageQuestions.auctionRaStageId, ids))
-        .orderBy(asc(auctionRaStageQuestions.displayOrder))
-    : [];
+
+  const [questionRows, submittedRows] = await Promise.all([
+    ids.length
+      ? db
+          .select()
+          .from(auctionRaStageQuestions)
+          .where(inArray(auctionRaStageQuestions.auctionRaStageId, ids))
+          .orderBy(asc(auctionRaStageQuestions.displayOrder))
+      : [],
+    ids.length
+      ? db
+          .selectDistinct({ stageId: auctionRaStageResponses.auctionRaStageId })
+          .from(auctionRaStageResponses)
+          .where(
+            and(
+              inArray(auctionRaStageResponses.auctionRaStageId, ids),
+              eq(auctionRaStageResponses.status, "submitted"),
+            ),
+          )
+      : [],
+  ]);
+
+  const lockedStageIds = new Set(submittedRows.map((r) => r.stageId));
 
   const result = {} as AuctionRaStagesDto;
   for (const row of rows) {
@@ -110,6 +127,7 @@ export async function loadStagesDto(auctionId: number): Promise<AuctionRaStagesD
       key: row.stageKey,
       enabled: row.enabled,
       status: row.status,
+      isLocked: lockedStageIds.has(row.id),
       startsAt: row.startsAt ?? null,
       endsAt: row.endsAt ?? null,
       publishedAt: row.publishedAt ?? null,
