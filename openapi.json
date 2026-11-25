@@ -7146,6 +7146,17 @@
               "closed"
             ]
           },
+          "auctionNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "clientId": {
+            "type": "integer"
+          },
+          "clientName": {
+            "type": "string",
+            "nullable": true
+          },
           "startsAt": {
             "type": "string",
             "nullable": true
@@ -7211,6 +7222,9 @@
         "required": [
           "stageKey",
           "stageStatus",
+          "auctionNumber",
+          "clientId",
+          "clientName",
           "startsAt",
           "endsAt",
           "responseStatus",

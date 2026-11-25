@@ -55,6 +55,9 @@ export const BidderRaStageDetail = z
   .object({
     stageKey: z.enum(["rfi", "rfp", "rfq"]),
     stageStatus: z.enum(["draft", "published", "closed"]),
+    auctionNumber: z.string().nullable(),
+    clientId: z.number().int(),
+    clientName: z.string().nullable(),
     startsAt: z.string().nullable(),
     endsAt: z.string().nullable(),
     responseStatus: z.enum(["invited", "draft", "submitted"]),

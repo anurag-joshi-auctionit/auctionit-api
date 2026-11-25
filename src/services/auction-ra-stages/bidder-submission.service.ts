@@ -30,6 +30,9 @@ export type BidderStageListItemDto = {
 export type BidderStageDetailDto = {
   stageKey: AuctionRaStageKey;
   stageStatus: "draft" | "published" | "closed";
+  auctionNumber: string | null;
+  clientId: number;
+  clientName: string | null;
   startsAt: string | null;
   endsAt: string | null;
   responseStatus: "invited" | "draft" | "submitted";
@@ -56,9 +59,14 @@ async function requireResponseRow(
       stageStatus: auctionRaStages.status,
       startsAt: auctionRaStages.startsAt,
       endsAt: auctionRaStages.endsAt,
+      auctionNumber: auctions.auctionNumber,
+      clientId: clients.id,
+      clientName: clients.companyName,
     })
     .from(auctionRaStageResponses)
     .innerJoin(auctionRaStages, eq(auctionRaStages.id, auctionRaStageResponses.auctionRaStageId))
+    .innerJoin(auctions, eq(auctions.id, auctionRaStages.auctionId))
+    .innerJoin(clients, eq(clients.id, auctions.clientId))
     .where(
       and(
         eq(auctionRaStages.auctionId, auctionId),
@@ -101,8 +109,13 @@ async function requireResponseRow(
       stageStatus: auctionRaStages.status,
       startsAt: auctionRaStages.startsAt,
       endsAt: auctionRaStages.endsAt,
+      auctionNumber: auctions.auctionNumber,
+      clientId: clients.id,
+      clientName: clients.companyName,
     })
     .from(auctionRaStages)
+    .innerJoin(auctions, eq(auctions.id, auctionRaStages.auctionId))
+    .innerJoin(clients, eq(clients.id, auctions.clientId))
     .where(and(eq(auctionRaStages.auctionId, auctionId), eq(auctionRaStages.stageKey, stageKey)))
     .limit(1);
 
@@ -299,6 +312,9 @@ export const bidderRaStageSubmissionService = {
     return {
       stageKey,
       stageStatus: row.stageStatus,
+      auctionNumber: row.auctionNumber ?? null,
+      clientId: row.clientId,
+      clientName: row.clientName ?? null,
       startsAt: row.startsAt ?? null,
       endsAt: row.endsAt ?? null,
       responseStatus: row.responseStatus,

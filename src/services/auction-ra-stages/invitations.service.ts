@@ -1,8 +1,9 @@
 import { formatUtcNow } from "@auctionit/lib/date";
-import { and, eq, inArray, isNotNull, notInArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { auctionRaStageInvitedBidders } from "../../db/schema/auction-ra-stage-invitations.js";
 import { auctionRaStageResponses } from "../../db/schema/auction-ra-stage-responses.js";
+import { auctionRaStages } from "../../db/schema/auction-ra-stages.js";
 import { bidders } from "../../db/schema/bidders.js";
 import { materials } from "../../db/schema/materials.js";
 import type { AuctionRaStageKey } from "../../db/schema/question-templates.js";
@@ -213,12 +214,26 @@ export const auctionRaStagesInvitationsService = {
           invitedAt: now,
         });
 
-        await tx.insert(auctionRaStageResponses).values({
-          auctionRaStageId: entryStageRow.id,
-          bidderId: bidderRow.id,
-          status: "invited",
-          createdAt: now,
-        });
+        await tx
+          .insert(auctionRaStageResponses)
+          .values({
+            auctionRaStageId: entryStageRow.id,
+            bidderId: bidderRow.id,
+            status: "invited",
+            createdAt: now,
+          })
+          .onConflictDoUpdate({
+            target: [auctionRaStageResponses.auctionRaStageId, auctionRaStageResponses.bidderId],
+            set: {
+              status: sql`'invited'`,
+              submittedAt: null,
+              isShortlisted: null,
+              rejectionReason: null,
+              decidedBy: null,
+              decidedAt: null,
+              updatedAt: now,
+            },
+          });
       });
 
       const email = emailByBidderId.get(bidderRow.id);
@@ -241,15 +256,37 @@ export const auctionRaStagesInvitationsService = {
   async withdraw(auctionId: number, bidderId: number, userId: number): Promise<void> {
     await requireReverseAuction(auctionId);
     const now = formatUtcNow();
-    await db
-      .update(auctionRaStageInvitedBidders)
-      .set({ isActive: false, withdrawnAt: now, withdrawnBy: userId })
-      .where(
-        and(
-          eq(auctionRaStageInvitedBidders.auctionId, auctionId),
-          eq(auctionRaStageInvitedBidders.bidderId, bidderId),
-          eq(auctionRaStageInvitedBidders.isActive, true),
-        ),
-      );
+    await db.transaction(async (tx) => {
+      await tx
+        .update(auctionRaStageInvitedBidders)
+        .set({ isActive: false, withdrawnAt: now, withdrawnBy: userId })
+        .where(
+          and(
+            eq(auctionRaStageInvitedBidders.auctionId, auctionId),
+            eq(auctionRaStageInvitedBidders.bidderId, bidderId),
+            eq(auctionRaStageInvitedBidders.isActive, true),
+          ),
+        );
+      // Remove unsubmitted response rows so re-inviting the same bidder later
+      // doesn't hit the unique (auctionRaStageId, bidderId) constraint.
+      const stageIds = await tx
+        .select({ id: auctionRaStages.id })
+        .from(auctionRaStages)
+        .where(eq(auctionRaStages.auctionId, auctionId));
+      if (stageIds.length > 0) {
+        await tx
+          .delete(auctionRaStageResponses)
+          .where(
+            and(
+              eq(auctionRaStageResponses.bidderId, bidderId),
+              inArray(
+                auctionRaStageResponses.auctionRaStageId,
+                stageIds.map((r) => r.id),
+              ),
+              inArray(auctionRaStageResponses.status, ["invited", "draft"]),
+            ),
+          );
+      }
+    });
   },
 };

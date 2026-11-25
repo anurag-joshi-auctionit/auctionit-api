@@ -300,12 +300,14 @@ router.get("/", async (req, res, next) => {
   }
   const parsed = listQuerySchema.safeParse(req.query);
   if (!parsed.success) {
-    res.status(400).json(
-      zodValidationErrorBody(
-        parsed.error,
-        AuctionsValidationMessages.VALIDATION_FAILED,
-      ),
-    );
+    res
+      .status(400)
+      .json(
+        zodValidationErrorBody(
+          parsed.error,
+          AuctionsValidationMessages.VALIDATION_FAILED,
+        ),
+      );
     return;
   }
   const { bucket, from, to } = parsed.data;
@@ -453,7 +455,9 @@ router.get("/:id/catalogue", async (req, res, next) => {
       (await bidderAttachedToAuction(bidderId, auctionId)) ||
       (await auctionIsPublished(auctionId));
     if (!allowed) {
-      res.status(403).json({ error: BidderAuctionAccessMessages.NOT_ATTACHED_TO_AUCTION });
+      res
+        .status(403)
+        .json({ error: BidderAuctionAccessMessages.NOT_ATTACHED_TO_AUCTION });
       return;
     }
     const url = await pgActiveCatalogueDownloadUrl(auctionId);
@@ -482,7 +486,9 @@ router.get("/:id/tnc", async (req, res, next) => {
   }
   try {
     if (!(await bidderAttachedToAuction(bidderId, auctionId))) {
-      res.status(403).json({ error: BidderAuctionAccessMessages.NOT_ATTACHED_TO_AUCTION });
+      res
+        .status(403)
+        .json({ error: BidderAuctionAccessMessages.NOT_ATTACHED_TO_AUCTION });
       return;
     }
     const url = await pgActiveTncDownloadUrl(auctionId);
@@ -511,7 +517,9 @@ router.post("/:id/accept-tnc", async (req, res, next) => {
   }
   try {
     if (!(await bidderAttachedToAuction(bidderId, auctionId))) {
-      res.status(403).json({ error: BidderAuctionAccessMessages.NOT_ATTACHED_TO_AUCTION });
+      res
+        .status(403)
+        .json({ error: BidderAuctionAccessMessages.NOT_ATTACHED_TO_AUCTION });
       return;
     }
     const userId = req.user?.id ?? null;
@@ -687,7 +695,9 @@ router.get("/:id", async (req, res, next) => {
 
     if (auction.status === "published") {
       if (!(await bidderAttachedToAuction(bidderId, auctionId))) {
-        res.status(403).json({ error: BidderAuctionAccessMessages.NOT_ATTACHED_TO_AUCTION });
+        res
+          .status(403)
+          .json({ error: BidderAuctionAccessMessages.NOT_ATTACHED_TO_AUCTION });
         return;
       }
       res.json({
@@ -706,7 +716,9 @@ router.get("/:id", async (req, res, next) => {
         ) AS ok
       `);
       if (participated.rows[0]?.ok !== true) {
-        res.status(404).json({ error: AuctionsErrorMessages.AUCTION_NOT_FOUND });
+        res
+          .status(404)
+          .json({ error: AuctionsErrorMessages.AUCTION_NOT_FOUND });
         return;
       }
       res.json({
