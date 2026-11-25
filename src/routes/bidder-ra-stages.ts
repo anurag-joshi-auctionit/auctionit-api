@@ -85,6 +85,44 @@ router.get("/auctions/:auctionId/:stageKey", async (req, res, next) => {
   }
 });
 
+router.post("/auctions/:auctionId/:stageKey/save-draft", uploadAny, async (req, res, next) => {
+  const auctionId = parseAuctionId(req.params.auctionId);
+  const stageKey = parseStageKey(req.params.stageKey);
+  const bidderId = bidderIdOf(req);
+  if (auctionId === null || stageKey === null || bidderId === null) {
+    res.status(400).json({ error: "Invalid auction id or stage key." });
+    return;
+  }
+
+  let answers: Record<string, string | string[] | undefined> = {};
+  try {
+    answers = req.body.answers ? JSON.parse(req.body.answers) : {};
+  } catch {
+    res.status(400).json({ error: "Invalid answers payload." });
+    return;
+  }
+
+  const uploadedFiles = (req.files as Express.Multer.File[] | undefined) ?? [];
+  const files = uploadedFiles
+    .filter((f) => f.fieldname.startsWith("file_"))
+    .map((f) => ({
+      questionId: f.fieldname.slice("file_".length),
+      filename: f.originalname,
+      mimetype: f.mimetype,
+      buffer: f.buffer,
+    }));
+
+  const userId = req.user?.id ?? bidderId;
+
+  try {
+    await bidderRaStageSubmissionService.saveDraft(auctionId, stageKey, bidderId, answers, files, userId);
+    res.json({ ok: true });
+  } catch (e) {
+    if (handleError(e, res)) return;
+    next(e);
+  }
+});
+
 router.post("/auctions/:auctionId/:stageKey/submit", uploadAny, async (req, res, next) => {
   const auctionId = parseAuctionId(req.params.auctionId);
   const stageKey = parseStageKey(req.params.stageKey);

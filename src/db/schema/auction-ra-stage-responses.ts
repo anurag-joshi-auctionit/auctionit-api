@@ -14,7 +14,7 @@ import { bidders } from "./bidders.js";
 import { auctionRaStageQuestions, auctionRaStages } from "./auction-ra-stages.js";
 import { users } from "./users.js";
 
-export const AUCTION_RA_STAGE_RESPONSE_STATUSES = ["invited", "submitted"] as const;
+export const AUCTION_RA_STAGE_RESPONSE_STATUSES = ["invited", "draft", "submitted"] as const;
 export type AuctionRaStageResponseStatus =
   (typeof AUCTION_RA_STAGE_RESPONSE_STATUSES)[number];
 export const auctionRaStageResponseStatusEnum = pgEnum(

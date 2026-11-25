@@ -6653,6 +6653,7 @@
             "type": "string",
             "enum": [
               "invited",
+              "draft",
               "submitted"
             ]
           },
@@ -6996,6 +6997,7 @@
             "type": "string",
             "enum": [
               "invited",
+              "draft",
               "submitted"
             ]
           },
@@ -7037,6 +7039,7 @@
             "type": "string",
             "enum": [
               "invited",
+              "draft",
               "submitted"
             ]
           },
@@ -7155,6 +7158,7 @@
             "type": "string",
             "enum": [
               "invited",
+              "draft",
               "submitted"
             ]
           },
@@ -39179,6 +39183,123 @@
           },
           "400": {
             "description": "Not invited to this stage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in or session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bidder-ra-stages/auctions/{auctionId}/{stageKey}/save-draft": {
+      "post": {
+        "operationId": "postBidderRaStagesAuctionsByAuctionIdByStageKeySaveDraft",
+        "tags": [
+          "Bidder portal – RA Stages"
+        ],
+        "summary": "Save a draft response for a stage",
+        "description": "multipart/form-data: same shape as /submit but no required-field validation. Sets status to 'draft' and persists answers. Answers can be updated until the stage closes or the response is submitted.\n\n**Access:** login required.\n- Bidder portal users only.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "x-documented": true,
+        "x-portal-role": "bidder",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true,
+              "example": 1
+            },
+            "required": true,
+            "name": "auctionId",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "rfi",
+                "rfp",
+                "rfq"
+              ]
+            },
+            "required": true,
+            "name": "stageKey",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answers": {
+                    "type": "string",
+                    "description": "JSON-encoded Record<questionId, string | string[]>."
+                  }
+                },
+                "required": [
+                  "answers"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not invited, already submitted, or stage not open.",
             "content": {
               "application/json": {
                 "schema": {

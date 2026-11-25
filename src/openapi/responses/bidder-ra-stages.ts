@@ -6,7 +6,7 @@ import { z } from "../zod.js";
 export const BidderRaStageInvitation = z
   .object({
     stageKey: z.enum(["rfi", "rfp", "rfq"]),
-    status: z.enum(["invited", "submitted"]),
+    status: z.enum(["invited", "draft", "submitted"]),
     isShortlisted: z.boolean().nullable(),
     rejectionReason: z.string().nullable(),
   })
@@ -44,7 +44,7 @@ export const RaStageWindow = z
     stageStatus: z.enum(["draft", "published", "closed"]),
     startsAt: z.string().nullable(),
     endsAt: z.string().nullable(),
-    responseStatus: z.enum(["invited", "submitted"]),
+    responseStatus: z.enum(["invited", "draft", "submitted"]),
     isShortlisted: z.boolean().nullable(),
   })
   .openapi("RaStageWindow");
@@ -57,7 +57,7 @@ export const BidderRaStageDetail = z
     stageStatus: z.enum(["draft", "published", "closed"]),
     startsAt: z.string().nullable(),
     endsAt: z.string().nullable(),
-    responseStatus: z.enum(["invited", "submitted"]),
+    responseStatus: z.enum(["invited", "draft", "submitted"]),
     isShortlisted: z.boolean().nullable(),
     rejectionReason: z.string().nullable(),
     questions: z.array(BidderRaStageQuestion),

@@ -18,7 +18,7 @@ import { AuctionRaStageNotFoundError } from "./errors.js";
 export type StageResponseRowDto = {
   bidderId: number;
   bidderName: string;
-  status: "invited" | "submitted";
+  status: "invited" | "draft" | "submitted";
   submittedAt: string | null;
   answered: number;
   requiredAnswered: number;

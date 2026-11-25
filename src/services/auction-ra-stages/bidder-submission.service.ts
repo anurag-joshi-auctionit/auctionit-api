@@ -22,7 +22,7 @@ export type BidderStageListItemDto = {
   endsAt: string | null;
   questionCount: number;
   requiredQuestionCount: number;
-  responseStatus: "invited" | "submitted" | null;
+  responseStatus: "invited" | "draft" | "submitted" | null;
   isShortlisted: boolean | null;
   rejectionReason: string | null;
 };
@@ -32,7 +32,7 @@ export type BidderStageDetailDto = {
   stageStatus: "draft" | "published" | "closed";
   startsAt: string | null;
   endsAt: string | null;
-  responseStatus: "invited" | "submitted";
+  responseStatus: "invited" | "draft" | "submitted";
   isShortlisted: boolean | null;
   rejectionReason: string | null;
   questions: AuctionRaStageQuestionDto[];
@@ -137,7 +137,7 @@ export type RaStageWindowDto = {
   stageStatus: "draft" | "published" | "closed";
   startsAt: string | null;
   endsAt: string | null;
-  responseStatus: "invited" | "submitted";
+  responseStatus: "invited" | "draft" | "submitted";
   isShortlisted: boolean | null;
 };
 
@@ -432,6 +432,105 @@ export const bidderRaStageSubmissionService = {
       await tx
         .update(auctionRaStageResponses)
         .set({ status: "submitted", submittedAt: now, updatedAt: now })
+        .where(eq(auctionRaStageResponses.id, row.responseId));
+    });
+  },
+
+  async saveDraft(
+    auctionId: number,
+    stageKey: AuctionRaStageKey,
+    bidderId: number,
+    answers: Record<string, SubmitAnswerValue>,
+    files: { questionId: string; filename: string; mimetype: string; buffer: Buffer }[],
+    userId: number,
+  ): Promise<void> {
+    const row = await requireResponseRow(auctionId, stageKey, bidderId);
+
+    if (row.responseStatus === "submitted") {
+      throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.ALREADY_SUBMITTED);
+    }
+    if (row.stageStatus !== "published") {
+      throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.STAGE_NOT_OPEN);
+    }
+    const nowMs = Date.now();
+    const windowOpen = row.startsAt ? new Date(row.startsAt).getTime() <= nowMs : false;
+    const windowClosed = row.endsAt ? new Date(row.endsAt).getTime() <= nowMs : false;
+    if (!windowOpen || windowClosed) {
+      throw new AuctionRaStageValidationError(BidderRaStagesErrorMessages.STAGE_NOT_OPEN);
+    }
+
+    const questionRows = await db
+      .select()
+      .from(auctionRaStageQuestions)
+      .where(eq(auctionRaStageQuestions.auctionRaStageId, row.stageId));
+
+    const filesByQuestionId = new Map<string, typeof files>();
+    for (const f of files) {
+      const arr = filesByQuestionId.get(f.questionId) ?? [];
+      arr.push(f);
+      filesByQuestionId.set(f.questionId, arr);
+    }
+
+    const uploadedByQuestionId = new Map<string, FileListItem[]>();
+    for (const q of questionRows) {
+      if (q.answerType !== "file_upload") continue;
+      const qid = String(q.id);
+      const uploads = filesByQuestionId.get(qid) ?? [];
+      if (uploads.length === 0) continue;
+      uploadedByQuestionId.set(
+        qid,
+        await Promise.all(
+          uploads.map((f) =>
+            filesService.upload({
+              userId,
+              filename: f.filename,
+              contentType: f.mimetype,
+              body: f.buffer,
+            }),
+          ),
+        ),
+      );
+    }
+
+    const now = formatUtcNow();
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(auctionRaStageAnswers)
+        .where(eq(auctionRaStageAnswers.responseId, row.responseId));
+
+      for (const q of questionRows) {
+        const qid = String(q.id);
+        if (q.answerType === "file_upload") {
+          const uploaded = uploadedByQuestionId.get(qid) ?? [];
+          if (uploaded.length === 0) continue;
+          await tx.insert(auctionRaStageAnswers).values({
+            responseId: row.responseId,
+            stageQuestionId: q.id,
+            fileRefs: uploaded.map((f) => ({ fileId: f.id, fileName: f.filename, sizeLabel: "" })),
+          });
+          continue;
+        }
+
+        const value = answers[qid];
+        if (value === undefined) continue;
+        if (q.answerType === "single_choice" || q.answerType === "multiple_choice") {
+          await tx.insert(auctionRaStageAnswers).values({
+            responseId: row.responseId,
+            stageQuestionId: q.id,
+            valueChoices: Array.isArray(value) ? value : [value],
+          });
+        } else {
+          await tx.insert(auctionRaStageAnswers).values({
+            responseId: row.responseId,
+            stageQuestionId: q.id,
+            valueText: Array.isArray(value) ? value[0] ?? null : value,
+          });
+        }
+      }
+
+      await tx
+        .update(auctionRaStageResponses)
+        .set({ status: "draft", updatedAt: now })
         .where(eq(auctionRaStageResponses.id, row.responseId));
     });
   },

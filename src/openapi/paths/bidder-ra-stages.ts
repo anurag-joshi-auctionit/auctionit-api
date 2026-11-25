@@ -39,6 +39,24 @@ r.get("/auctions/:auctionId/:stageKey", {
   },
 });
 
+r.post("/auctions/:auctionId/:stageKey/save-draft", {
+  summary: "Save a draft response for a stage",
+  description:
+    "multipart/form-data: same shape as /submit but no required-field validation. Sets status to 'draft' and persists answers. Answers can be updated until the stage closes or the response is submitted.",
+  bodyContentType: "multipart/form-data",
+  params: AuctionIdStageKeyParam,
+  body: z.object({
+    answers: z.string().openapi({ description: "JSON-encoded Record<questionId, string | string[]>." }),
+  }),
+  responses: {
+    200: OkBody,
+    400: {
+      description: "Not invited, already submitted, or stage not open.",
+      schema: ErrorBody,
+    },
+  },
+});
+
 r.post("/auctions/:auctionId/:stageKey/submit", {
   summary: "Submit my stage response",
   description:

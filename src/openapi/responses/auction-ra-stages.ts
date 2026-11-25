@@ -47,7 +47,7 @@ export const AuctionRaStageResponseRow = z
   .object({
     bidderId: z.number().int(),
     bidderName: z.string(),
-    status: z.enum(["invited", "submitted"]),
+    status: z.enum(["invited", "draft", "submitted"]),
     submittedAt: z.string().nullable(),
     answered: z.number().int(),
     requiredAnswered: z.number().int(),
