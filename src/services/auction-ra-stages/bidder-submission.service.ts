@@ -9,6 +9,8 @@ import {
   auctionRaStageResponses,
 } from "../../db/schema/auction-ra-stage-responses.js";
 import { AUCTION_RA_STAGE_KEYS, type AuctionRaStageKey } from "../../db/schema/question-templates.js";
+import { auctions } from "../../db/schema/auctions.js";
+import { clients } from "../../db/schema/clients.js";
 import { filesService, type FileListItem } from "../files.service.js";
 import { questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
@@ -125,6 +127,60 @@ async function requireResponseRow(
   }
 
   return { ...created, ...stageRow };
+}
+
+export type RaStageWindowDto = {
+  auctionId: number;
+  auctionNumber: string | null;
+  clientName: string | null;
+  stageKey: AuctionRaStageKey;
+  stageStatus: "draft" | "published" | "closed";
+  startsAt: string | null;
+  endsAt: string | null;
+  responseStatus: "invited" | "submitted";
+  isShortlisted: boolean | null;
+};
+
+export async function listMyStageWindows(bidderId: number): Promise<RaStageWindowDto[]> {
+  const rows = await db
+    .select({
+      auctionId: auctions.id,
+      auctionNumber: auctions.auctionNumber,
+      clientName: clients.companyName,
+      stageKey: auctionRaStages.stageKey,
+      stageStatus: auctionRaStages.status,
+      startsAt: auctionRaStages.startsAt,
+      endsAt: auctionRaStages.endsAt,
+      responseStatus: auctionRaStageResponses.status,
+      isShortlisted: auctionRaStageResponses.isShortlisted,
+    })
+    .from(auctionRaStageResponses)
+    .innerJoin(auctionRaStages, eq(auctionRaStages.id, auctionRaStageResponses.auctionRaStageId))
+    .innerJoin(auctions, and(eq(auctions.id, auctionRaStages.auctionId), eq(auctions.isActive, true)))
+    .leftJoin(clients, eq(clients.id, auctions.clientId))
+    .where(
+      and(
+        eq(auctionRaStageResponses.bidderId, bidderId),
+        eq(auctions.status, "published"),
+      ),
+    );
+
+  return rows
+    .sort(
+      (a, b) =>
+        AUCTION_RA_STAGE_KEYS.indexOf(a.stageKey) - AUCTION_RA_STAGE_KEYS.indexOf(b.stageKey),
+    )
+    .map((r) => ({
+      auctionId: r.auctionId,
+      auctionNumber: r.auctionNumber ?? null,
+      clientName: r.clientName ?? null,
+      stageKey: r.stageKey,
+      stageStatus: r.stageStatus,
+      startsAt: r.startsAt ?? null,
+      endsAt: r.endsAt ?? null,
+      responseStatus: r.responseStatus,
+      isShortlisted: r.isShortlisted ?? null,
+    }));
 }
 
 export const bidderRaStageSubmissionService = {

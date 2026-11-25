@@ -9,6 +9,7 @@ import { ErrorBody, OkBody, ValidationErrorBody } from "../common.js";
 import { documentRouter } from "../define.js";
 import { z } from "../zod.js";
 import {
+  ActiveRaAuctionList,
   AuctionRaStageInvitableBidderList,
   AuctionRaStageInviteFilterOptions,
   AuctionRaStageInvitedBidderList,
@@ -31,6 +32,14 @@ const AuctionIdStageKeyBidderIdParam = AuctionIdStageKeyParam.extend({
 });
 const AuctionIdBidderIdParam = AuctionIdParam.extend({
   bidderId: z.coerce.number().int().positive(),
+});
+
+r.get("/ra-stages/active-auctions", {
+  summary: "List active RA auctions",
+  description: "Returns all published, active reverse auctions that have at least one enabled RA stage.",
+  responses: {
+    200: ActiveRaAuctionList,
+  },
 });
 
 r.get("/:auctionId/ra-stages", {

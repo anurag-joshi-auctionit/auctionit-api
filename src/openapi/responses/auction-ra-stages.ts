@@ -117,3 +117,14 @@ export const AuctionRaStageInvitedBidder = z
 export const AuctionRaStageInvitedBidderList = z
   .array(AuctionRaStageInvitedBidder)
   .openapi("AuctionRaStageInvitedBidderList");
+
+export const ActiveRaAuction = z
+  .object({
+    auctionId: z.number().int(),
+    auctionNumber: z.string().nullable(),
+    clientName: z.string().nullable(),
+    enabledStages: z.array(z.enum(["rfi", "rfp", "rfq"])),
+  })
+  .openapi("ActiveRaAuction");
+
+export const ActiveRaAuctionList = z.array(ActiveRaAuction).openapi("ActiveRaAuctionList");

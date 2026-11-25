@@ -1,12 +1,59 @@
 import { formatUtcNow } from "@auctionit/lib/date";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { auctionRaStages } from "../../db/schema/auction-ra-stages.js";
+import { type AuctionRaStageKey } from "../../db/schema/question-templates.js";
+import { auctions } from "../../db/schema/auctions.js";
+import { clients } from "../../db/schema/clients.js";
 import type { SaveStagesConfigInput } from "../../lib/auction-ra-stages/schemas.js";
 import { requireReverseAuction } from "./auction-context.js";
 import { ensureStagesExist, isStageLocked, loadStagesDto, type AuctionRaStagesDto } from "./dto.js";
 
+export type ActiveRaAuctionDto = {
+  auctionId: number;
+  auctionNumber: string | null;
+  clientName: string | null;
+  enabledStages: AuctionRaStageKey[];
+};
+
 export const auctionRaStagesConfigService = {
+  async listActiveAuctions(): Promise<ActiveRaAuctionDto[]> {
+    const rows = await db
+      .select({
+        auctionId: auctions.id,
+        auctionNumber: auctions.auctionNumber,
+        clientName: clients.companyName,
+        stageKey: auctionRaStages.stageKey,
+      })
+      .from(auctionRaStages)
+      .innerJoin(auctions, eq(auctionRaStages.auctionId, auctions.id))
+      .leftJoin(clients, eq(auctions.clientId, clients.id))
+      .where(
+        and(
+          eq(auctionRaStages.enabled, true),
+          eq(auctions.status, "published"),
+          eq(auctions.isActive, true),
+        ),
+      )
+      .orderBy(auctions.auctionNumber, auctionRaStages.stageKey);
+
+    const map = new Map<number, ActiveRaAuctionDto>();
+    for (const r of rows) {
+      let entry = map.get(r.auctionId);
+      if (!entry) {
+        entry = {
+          auctionId: r.auctionId,
+          auctionNumber: r.auctionNumber,
+          clientName: r.clientName ?? null,
+          enabledStages: [],
+        };
+        map.set(r.auctionId, entry);
+      }
+      entry.enabledStages.push(r.stageKey);
+    }
+    return [...map.values()];
+  },
+
   async getStages(auctionId: number): Promise<AuctionRaStagesDto> {
     await requireReverseAuction(auctionId);
     return loadStagesDto(auctionId);

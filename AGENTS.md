@@ -16,4 +16,4 @@
 - Every change to a route — new, removed, renamed, or a changed request/response shape — must update its docs in `src/openapi/paths/<router>.ts` (response schemas in `src/openapi/responses/`). Use the `/api-docs` skill. Conventions are in `docs/api/README.md`.
 - Then run `pnpm openapi:generate && pnpm openapi:check` and commit `openapi.json` with the change.
 - Never add routes to `src/openapi/undocumented.json`; it is a backlog that only shrinks (`pnpm openapi:check --prune`).
-- Swagger UI: `http://localhost:4000/docs`.
+- Swagger UI: `http://localhost:3500/docs`.

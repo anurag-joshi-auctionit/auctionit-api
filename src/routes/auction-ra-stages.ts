@@ -56,6 +56,18 @@ function handleError(e: unknown, res: Response): boolean {
 }
 
 router.get(
+  "/ra-stages/active-auctions",
+  requireAnyPermission(["auctions.read"]),
+  async (_req, res, next) => {
+    try {
+      res.json(await auctionRaStagesConfigService.listActiveAuctions());
+    } catch (e) {
+      next(e);
+    }
+  },
+);
+
+router.get(
   "/:auctionId/ra-stages",
   requireAnyPermission(["auctions.read", "auction.ra-stages.write"]),
   async (req, res, next) => {

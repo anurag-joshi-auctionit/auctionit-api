@@ -17,6 +17,7 @@
     "start": "node dist/index.js",
     "start:email-worker": "node dist/workers/email-worker.js",
     "typecheck": "tsc --noEmit",
+    "build:packages": "pnpm -r --filter './packages/*' build",
     "typecheck:packages": "pnpm -r --filter './packages/*' typecheck",
     "test:packages": "pnpm -r --filter './packages/*' test",
     "openapi:generate": "tsx src/scripts/openapi-generate.ts",

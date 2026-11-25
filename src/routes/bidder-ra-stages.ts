@@ -3,7 +3,10 @@ import { BidderRaStagesValidationMessages } from "@auctionit/messages/bidder-ra-
 import { requireAuth, requirePortalRole } from "../auth/middleware.js";
 import { AUCTION_RA_STAGE_KEYS, type AuctionRaStageKey } from "../db/schema/question-templates.js";
 import { anyMemoryUpload, createMemoryUpload } from "../lib/import/index.js";
-import { bidderRaStageSubmissionService } from "../services/auction-ra-stages/bidder-submission.service.js";
+import {
+  bidderRaStageSubmissionService,
+  listMyStageWindows,
+} from "../services/auction-ra-stages/bidder-submission.service.js";
 import { AuctionRaStageValidationError } from "../services/auction-ra-stages/errors.js";
 
 const router = Router();
@@ -37,6 +40,19 @@ function handleError(e: unknown, res: Response): boolean {
   }
   return false;
 }
+
+router.get("/my-stages", async (req, res, next) => {
+  const bidderId = bidderIdOf(req);
+  if (bidderId === null) {
+    res.status(403).json({ error: "Not a bidder." });
+    return;
+  }
+  try {
+    res.json(await listMyStageWindows(bidderId));
+  } catch (e) {
+    next(e);
+  }
+});
 
 router.get("/auctions/:auctionId", async (req, res, next) => {
   const auctionId = parseAuctionId(req.params.auctionId);

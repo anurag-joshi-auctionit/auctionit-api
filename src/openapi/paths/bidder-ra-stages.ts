@@ -1,7 +1,11 @@
 import { ErrorBody, OkBody } from "../common.js";
 import { documentRouter } from "../define.js";
 import { z } from "../zod.js";
-import { BidderRaStageDetail, BidderRaStageInvitationList } from "../responses/bidder-ra-stages.js";
+import {
+  BidderRaStageDetail,
+  BidderRaStageInvitationList,
+  RaStageWindowList,
+} from "../responses/bidder-ra-stages.js";
 
 // Docs for src/routes/bidder-ra-stages.ts — see docs/api/README.md.
 const r = documentRouter("/bidder-ra-stages");
@@ -11,6 +15,13 @@ const AuctionIdParam = z.object({
 });
 const AuctionIdStageKeyParam = AuctionIdParam.extend({
   stageKey: z.enum(["rfi", "rfp", "rfq"]),
+});
+
+r.get("/my-stages", {
+  summary: "List all RA stage windows across auctions",
+  description:
+    "Returns every RA stage the bidder is invited to or shortlisted into, across all published auctions.",
+  responses: { 200: RaStageWindowList },
 });
 
 r.get("/auctions/:auctionId", {

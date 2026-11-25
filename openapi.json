@@ -6341,6 +6341,45 @@
           "recipientCount"
         ]
       },
+      "ActiveRaAuction": {
+        "type": "object",
+        "properties": {
+          "auctionId": {
+            "type": "integer"
+          },
+          "auctionNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "clientName": {
+            "type": "string",
+            "nullable": true
+          },
+          "enabledStages": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "rfi",
+                "rfp",
+                "rfq"
+              ]
+            }
+          }
+        },
+        "required": [
+          "auctionId",
+          "auctionNumber",
+          "clientName",
+          "enabledStages"
+        ]
+      },
+      "ActiveRaAuctionList": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/ActiveRaAuction"
+        }
+      },
       "AuctionRaStageQuestion": {
         "type": "object",
         "properties": {
@@ -6912,6 +6951,76 @@
           "page",
           "pageSize"
         ]
+      },
+      "RaStageWindow": {
+        "type": "object",
+        "properties": {
+          "auctionId": {
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true
+          },
+          "auctionNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "clientName": {
+            "type": "string",
+            "nullable": true
+          },
+          "stageKey": {
+            "type": "string",
+            "enum": [
+              "rfi",
+              "rfp",
+              "rfq"
+            ]
+          },
+          "stageStatus": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "published",
+              "closed"
+            ]
+          },
+          "startsAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "endsAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "responseStatus": {
+            "type": "string",
+            "enum": [
+              "invited",
+              "submitted"
+            ]
+          },
+          "isShortlisted": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "required": [
+          "auctionId",
+          "auctionNumber",
+          "clientName",
+          "stageKey",
+          "stageStatus",
+          "startsAt",
+          "endsAt",
+          "responseStatus",
+          "isShortlisted"
+        ]
+      },
+      "RaStageWindowList": {
+        "type": "array",
+        "items": {
+          "$ref": "#/components/schemas/RaStageWindow"
+        }
       },
       "BidderRaStageInvitation": {
         "type": "object",
@@ -36718,6 +36827,74 @@
         }
       }
     },
+    "/auctions/ra-stages/active-auctions": {
+      "get": {
+        "operationId": "getAuctionsRaStagesActiveAuctions",
+        "tags": [
+          "Auctions – RA Stages"
+        ],
+        "summary": "List active RA auctions",
+        "description": "Returns all published, active reverse auctions that have at least one enabled RA stage.\n\n**Access:** login required.\n- Requires any of: `auctions.read`.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "x-documented": true,
+        "x-permissions": {
+          "anyOf": [
+            [
+              "auctions.read"
+            ]
+          ]
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveRaAuctionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in or session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auctions/{auctionId}/ra-stages": {
       "get": {
         "operationId": "getAuctionsByAuctionIdRaStages",
@@ -38781,6 +38958,68 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bidder-ra-stages/my-stages": {
+      "get": {
+        "operationId": "getBidderRaStagesMyStages",
+        "tags": [
+          "Bidder portal – RA Stages"
+        ],
+        "summary": "List all RA stage windows across auctions",
+        "description": "Returns every RA stage the bidder is invited to or shortlisted into, across all published auctions.\n\n**Access:** login required.\n- Bidder portal users only.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "cookieAuth": []
+          }
+        ],
+        "x-documented": true,
+        "x-portal-role": "bidder",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RaStageWindowList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not logged in or session expired.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorBody"
                 }
               }
             }

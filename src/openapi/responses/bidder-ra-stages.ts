@@ -1,6 +1,6 @@
 import { z } from "../zod.js";
 
-// Mirrors BidderStageInvitationDto / BidderStageDetailDto in
+// Mirrors BidderStageInvitationDto / BidderStageDetailDto / RaStageWindowDto in
 // services/auction-ra-stages/bidder-submission.service.ts.
 
 export const BidderRaStageInvitation = z
@@ -34,6 +34,22 @@ const BidderRaStageQuestion = z
     fileUpload: QuestionFileUpload,
   })
   .openapi("BidderRaStageQuestion");
+
+export const RaStageWindow = z
+  .object({
+    auctionId: z.number().int().positive(),
+    auctionNumber: z.string().nullable(),
+    clientName: z.string().nullable(),
+    stageKey: z.enum(["rfi", "rfp", "rfq"]),
+    stageStatus: z.enum(["draft", "published", "closed"]),
+    startsAt: z.string().nullable(),
+    endsAt: z.string().nullable(),
+    responseStatus: z.enum(["invited", "submitted"]),
+    isShortlisted: z.boolean().nullable(),
+  })
+  .openapi("RaStageWindow");
+
+export const RaStageWindowList = z.array(RaStageWindow).openapi("RaStageWindowList");
 
 export const BidderRaStageDetail = z
   .object({

@@ -21,7 +21,7 @@ import { liveBidService } from "../services/live-bid.service.js";
  *
  * Config:
  *   MODE                "http" (full stack, default) | "direct" (in-process placeBid)
- *   BASE_URL            API origin for http mode       (default: http://localhost:4000)
+ *   BASE_URL            API origin for http mode       (default: http://localhost:3500)
  *   TARGET_RPS          bids offered per second        (default: 500)
  *   DURATION_SEC        how long to hold the rate      (default: 30)
  *   RAMP_SEC            linear ramp to TARGET_RPS      (default: 0)
@@ -124,7 +124,7 @@ export function configFromEnv(overrides: Partial<StressConfig> = {}): StressConf
   return {
     label: "stress",
     mode: process.env.MODE === "direct" ? "direct" : "http",
-    baseUrl: process.env.BASE_URL ?? "http://localhost:4000",
+    baseUrl: process.env.BASE_URL ?? "http://localhost:3500",
     targetRps: num(process.env.TARGET_RPS, 500),
     durationSec: num(process.env.DURATION_SEC, 30),
     rampSec: num(process.env.RAMP_SEC, 0),
