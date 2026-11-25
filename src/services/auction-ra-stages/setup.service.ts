@@ -11,7 +11,6 @@ import {
   isStageLocked,
   loadStagesDto,
   nextEnabledStageKey,
-  previousEnabledStageKey,
   type AuctionRaStagesDto,
 } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
@@ -28,8 +27,32 @@ export const auctionRaStagesSetupService = {
     const rows = await ensureStagesExist(auctionId);
     const stage = rows.find((r) => r.stageKey === stageKey);
     if (!stage) throw new AuctionRaStageValidationError(AuctionRaStagesErrorMessages.STAGE_NOT_FOUND);
-    if (await isStageLocked(stage.id)) {
-      throw new AuctionRaStageValidationError(AuctionRaStagesErrorMessages.STAGE_LOCKED);
+    const locked = await isStageLocked(stage.id);
+
+    if (locked) {
+      // Questions and startsAt are locked — only endsAt may be updated.
+      const endsAt = new Date(input.endsAt);
+      if (Number.isNaN(endsAt.getTime())) {
+        throw new AuctionRaStageValidationError(AuctionRaStagesValidationMessages.ENDS_AT_REQUIRED);
+      }
+      if (stage.startsAt && endsAt.getTime() <= new Date(stage.startsAt).getTime()) {
+        throw new AuctionRaStageValidationError(AuctionRaStagesValidationMessages.ENDS_AT_BEFORE_STARTS_AT);
+      }
+      const nextKey = nextEnabledStageKey(rows, stageKey);
+      const nextStage = nextKey ? rows.find((r) => r.stageKey === nextKey) : null;
+      if (!nextStage) {
+        const auctionStartsAt = new Date(ctx.auctionStartsAt);
+        if (endsAt.getTime() >= auctionStartsAt.getTime()) {
+          throw new AuctionRaStageValidationError(AuctionRaStagesValidationMessages.ENDS_AT_AFTER_AUCTION_START);
+        }
+      }
+      const now = formatUtcNow();
+      await db
+        .update(auctionRaStages)
+        .set({ endsAt: input.endsAt, updatedAt: now, updatedBy: userId })
+        .where(eq(auctionRaStages.id, stage.id));
+      await runRaStageLifecycleSync({ auctionId });
+      return loadStagesDto(auctionId);
     }
 
     const startsAt = new Date(input.startsAt);
@@ -46,27 +69,8 @@ export const auctionRaStagesSetupService = {
       );
     }
 
-    const previousKey = previousEnabledStageKey(rows, stageKey);
-    const previousStage = previousKey
-      ? rows.find((r) => r.stageKey === previousKey)
-      : null;
-    if (previousStage?.endsAt && startsAt.getTime() < new Date(previousStage.endsAt).getTime()) {
-      throw new AuctionRaStageValidationError(
-        AuctionRaStagesValidationMessages.STARTS_AT_BEFORE_PREVIOUS_STAGE_ENDS(
-          previousKey!.toUpperCase(),
-        ),
-      );
-    }
-
     const nextKey = nextEnabledStageKey(rows, stageKey);
     const nextStage = nextKey ? rows.find((r) => r.stageKey === nextKey) : null;
-    if (nextStage?.startsAt && endsAt.getTime() > new Date(nextStage.startsAt).getTime()) {
-      throw new AuctionRaStageValidationError(
-        AuctionRaStagesValidationMessages.ENDS_AT_AFTER_NEXT_STAGE_STARTS(
-          nextKey!.toUpperCase(),
-        ),
-      );
-    }
     if (!nextStage) {
       const auctionStartsAt = new Date(ctx.auctionStartsAt);
       if (endsAt.getTime() >= auctionStartsAt.getTime()) {

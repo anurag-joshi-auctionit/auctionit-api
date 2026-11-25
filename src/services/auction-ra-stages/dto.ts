@@ -57,7 +57,7 @@ export async function isStageLocked(stageId: number): Promise<boolean> {
     .where(
       and(
         eq(auctionRaStageResponses.auctionRaStageId, stageId),
-        eq(auctionRaStageResponses.status, "submitted"),
+        inArray(auctionRaStageResponses.status, ["draft", "submitted"]),
       ),
     )
     .limit(1);
@@ -115,7 +115,7 @@ export async function loadStagesDto(auctionId: number): Promise<AuctionRaStagesD
           .where(
             and(
               inArray(auctionRaStageResponses.auctionRaStageId, ids),
-              eq(auctionRaStageResponses.status, "submitted"),
+              inArray(auctionRaStageResponses.status, ["draft", "submitted"]),
             ),
           )
       : [],
