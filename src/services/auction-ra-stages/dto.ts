@@ -78,7 +78,7 @@ export async function ensureStagesExist(
   if (missing.length === 0) return existing;
 
   const now = formatUtcNow();
-  const inserted = await db
+  await db
     .insert(auctionRaStages)
     .values(
       missing.map((key) => ({
@@ -89,9 +89,11 @@ export async function ensureStagesExist(
         createdAt: now,
       })),
     )
-    .returning();
+    .onConflictDoNothing();
 
-  return [...existing, ...inserted];
+  // Re-fetch: onConflictDoNothing won't return skipped rows, and a concurrent
+  // request may have inserted the rows we thought were missing.
+  return db.select().from(auctionRaStages).where(eq(auctionRaStages.auctionId, auctionId));
 }
 
 export async function loadStagesDto(auctionId: number): Promise<AuctionRaStagesDto> {
