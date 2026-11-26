@@ -169,32 +169,6 @@ function bidderAuctionsUnionSql(bidderId: number) {
 
         UNION ALL
 
-        -- Reverse-auction (RA) today — invited via stage invitation
-        SELECT a.auction_id AS id, a.auction_number, a.auction_type,
-               a.client_id,
-               c.company_name AS client_name,
-               to_char(a.auction_date, 'YYYY-MM-DD"T"HH24:MI:SS') AS auction_date,
-               NULL::text AS lot_start_time,
-               a.status,
-               0 AS lots,
-               'today'::text AS bucket,
-               NULL::text AS live_state,
-               EXISTS (SELECT 1 FROM auction_documents d
-                  WHERE d.auction_id = a.auction_id AND d.document_type_id = 1 AND d.is_active) AS has_catalogue,
-               EXISTS (SELECT 1 FROM auction_documents d
-                  WHERE d.auction_id = a.auction_id AND d.document_type_id = 2 AND d.is_active) AS has_tnc,
-               false AS tnc_accepted
-        FROM auction_ra_stage_invited_bidders inv
-        JOIN auctions a ON a.auction_id = inv.auction_id AND a.is_active = true
-        LEFT JOIN clients c ON c.id = a.client_id
-        WHERE inv.bidder_id = ${bidderId}
-          AND inv.is_active = true
-          AND a.status = 'published'
-          AND a.published_at <= now()
-          AND a.auction_date::date = (now() AT TIME ZONE 'Asia/Kolkata')::date
-
-        UNION ALL
-
         -- Standard auctions (lot-map based) — future
         SELECT a.auction_id AS id, a.auction_number, a.auction_type,
                a.client_id,
@@ -223,32 +197,6 @@ function bidderAuctionsUnionSql(bidderId: number) {
         JOIN auctions a ON a.auction_id = m.auction_id AND a.is_active = true
         LEFT JOIN clients c ON c.id = a.client_id
         WHERE a.status = 'published'
-          AND a.published_at <= now()
-          AND a.auction_date::date > (now() AT TIME ZONE 'Asia/Kolkata')::date
-
-        UNION ALL
-
-        -- Reverse-auction (RA) future — invited via stage invitation
-        SELECT a.auction_id AS id, a.auction_number, a.auction_type,
-               a.client_id,
-               c.company_name AS client_name,
-               to_char(a.auction_date, 'YYYY-MM-DD"T"HH24:MI:SS') AS auction_date,
-               NULL::text AS lot_start_time,
-               a.status,
-               0 AS lots,
-               'future'::text AS bucket,
-               NULL::text AS live_state,
-               EXISTS (SELECT 1 FROM auction_documents d
-                  WHERE d.auction_id = a.auction_id AND d.document_type_id = 1 AND d.is_active) AS has_catalogue,
-               EXISTS (SELECT 1 FROM auction_documents d
-                  WHERE d.auction_id = a.auction_id AND d.document_type_id = 2 AND d.is_active) AS has_tnc,
-               false AS tnc_accepted
-        FROM auction_ra_stage_invited_bidders inv
-        JOIN auctions a ON a.auction_id = inv.auction_id AND a.is_active = true
-        LEFT JOIN clients c ON c.id = a.client_id
-        WHERE inv.bidder_id = ${bidderId}
-          AND inv.is_active = true
-          AND a.status = 'published'
           AND a.published_at <= now()
           AND a.auction_date::date > (now() AT TIME ZONE 'Asia/Kolkata')::date
 
