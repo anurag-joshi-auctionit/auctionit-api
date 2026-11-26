@@ -36,6 +36,7 @@ export type RfqLotDto = {
   materialName: string | null;
   quantity: string | null;
   uom: string | null;
+  maxPrice: string | null;
   quotedAmount: string | null;
 };
 
@@ -329,6 +330,7 @@ export const bidderRaStageSubmissionService = {
         lotNumber: auctionLots.lotNumber,
         quantity: auctionLots.quantity,
         uomCode: uoms.code,
+        bidLimit: auctionLots.bidLimit,
         displayOrder: auctionLots.displayOrder,
       })
       .from(auctionLots)
@@ -365,6 +367,7 @@ export const bidderRaStageSubmissionService = {
       materialName: materialByLotId.get(l.id) ?? null,
       quantity: l.quantity ?? null,
       uom: l.uomCode ?? null,
+      maxPrice: l.bidLimit ?? null,
       quotedAmount: quoteByLotId.get(l.id) ?? null,
     }));
 
