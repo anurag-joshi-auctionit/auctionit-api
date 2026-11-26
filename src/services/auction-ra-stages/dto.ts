@@ -192,3 +192,13 @@ export function earliestEnabledStageKey(
   }
   return null;
 }
+
+/** Earliest enabled stage that is not closed — the best default entry for new invitations. */
+export function earliestOpenStageKey(
+  rows: { stageKey: AuctionRaStageKey; enabled: boolean; status: string }[],
+): AuctionRaStageKey | null {
+  for (const key of AUCTION_RA_STAGE_KEYS) {
+    if (rows.some((r) => r.stageKey === key && r.enabled && r.status !== "closed")) return key;
+  }
+  return null;
+}

@@ -204,6 +204,11 @@ export const auctionRaStagesInvitationsService = {
         AuctionRaStagesValidationMessages.SELECT_ENTRY_STAGE_REQUIRED,
       );
     }
+    if (entryStageRow.status === "closed") {
+      throw new AuctionRaStageValidationError(
+        AuctionRaStagesErrorMessages.ENTRY_STAGE_CLOSED,
+      );
+    }
 
     const now = formatUtcNow();
     const bidderRows = await db
