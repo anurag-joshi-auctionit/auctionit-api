@@ -1859,7 +1859,7 @@ export async function pgPatchLot(
 
   if (
     existingLot.bidCount > 0 &&
-    body.lotStartTime !== existingLot.startTime
+    body.lotStartTime.substring(0, 5) !== (existingLot.startTime ?? "").substring(0, 5)
   ) {
     throw new AuctionValidationError(
       AuctionsValidationMessages.LOT_START_TIME_NOT_EDITABLE_WITH_BIDS,
@@ -1873,7 +1873,7 @@ export async function pgPatchLot(
 
   if (
     existingLot.bidCount > 0 &&
-    String(body.startBidPrice) !== existingLot.startBidPrice
+    Number(body.startBidPrice) !== Number(existingLot.startBidPrice)
   ) {
     throw new AuctionValidationError(
       AuctionsValidationMessages.START_BID_NOT_EDITABLE_WITH_BIDS,
