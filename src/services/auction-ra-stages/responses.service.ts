@@ -5,7 +5,10 @@ import { auctionRaStageQuestions, auctionRaStages } from "../../db/schema/auctio
 import {
   auctionRaStageAnswers,
   auctionRaStageResponses,
+  auctionRaStageLotQuotes,
 } from "../../db/schema/auction-ra-stage-responses.js";
+import { auctionLots, auctionLotItems } from "../../db/schema/auction-lots.js";
+import { uoms } from "../../db/schema/uoms.js";
 import { bidders } from "../../db/schema/bidders.js";
 import type { AuctionRaStageKey } from "../../db/schema/question-templates.js";
 import { files } from "../../db/schema/files.js";
@@ -34,7 +37,19 @@ export type StageAnswerValueDto =
 
 export type StageAnswerDto = { questionId: string; value: StageAnswerValueDto };
 
-export type StageResponseDetailDto = StageResponseRowDto & { answers: StageAnswerDto[] };
+export type RfqLotQuoteDto = {
+  lotId: number;
+  lotNumber: string | null;
+  materialName: string | null;
+  quantity: string | null;
+  uom: string | null;
+  quotedAmount: string | null;
+};
+
+export type StageResponseDetailDto = StageResponseRowDto & {
+  answers: StageAnswerDto[];
+  lots: RfqLotQuoteDto[];
+};
 
 async function getStageOrThrow(auctionId: number, stageKey: AuctionRaStageKey) {
   const rows = await ensureStagesExist(auctionId);
@@ -173,6 +188,24 @@ export const auctionRaStagesResponsesService = {
       questionRows.filter((q) => q.required).map((q) => q.id),
     );
 
+    const lotQuoteRows = await db
+      .select({
+        lotId: auctionRaStageLotQuotes.lotId,
+        lotNumber: auctionLots.lotNumber,
+        materialName: auctionLotItems.materialName,
+        quantity: auctionLots.quantity,
+        uomCode: uoms.code,
+        quotedAmount: auctionRaStageLotQuotes.amount,
+      })
+      .from(auctionRaStageLotQuotes)
+      .innerJoin(auctionLots, eq(auctionLots.id, auctionRaStageLotQuotes.lotId))
+      .leftJoin(
+        auctionLotItems,
+        eq(auctionLotItems.lotId, auctionLots.id),
+      )
+      .leftJoin(uoms, eq(uoms.id, auctionLots.uomId))
+      .where(eq(auctionRaStageLotQuotes.responseId, response.id));
+
     return {
       bidderId: response.bidderId,
       bidderName: response.bidderName,
@@ -189,6 +222,14 @@ export const auctionRaStagesResponsesService = {
           value: answerValue(question?.answerType ?? "short_text", row, fileUrlById, fileNameById),
         };
       }),
+      lots: lotQuoteRows.map((r) => ({
+        lotId: r.lotId,
+        lotNumber: r.lotNumber ?? null,
+        materialName: r.materialName ?? null,
+        quantity: r.quantity ?? null,
+        uom: r.uomCode ?? null,
+        quotedAmount: r.quotedAmount ?? null,
+      })),
     };
   },
 

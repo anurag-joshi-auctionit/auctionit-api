@@ -7,10 +7,13 @@ import { auctionRaStageQuestions, auctionRaStages } from "../../db/schema/auctio
 import {
   auctionRaStageAnswers,
   auctionRaStageResponses,
+  auctionRaStageLotQuotes,
 } from "../../db/schema/auction-ra-stage-responses.js";
 import { AUCTION_RA_STAGE_KEYS, type AuctionRaStageKey } from "../../db/schema/question-templates.js";
 import { auctions } from "../../db/schema/auctions.js";
 import { clients } from "../../db/schema/clients.js";
+import { auctionLots, auctionLotItems } from "../../db/schema/auction-lots.js";
+import { uoms } from "../../db/schema/uoms.js";
 import { filesService, type FileListItem } from "../files.service.js";
 import { questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
@@ -27,6 +30,15 @@ export type BidderStageListItemDto = {
   rejectionReason: string | null;
 };
 
+export type RfqLotDto = {
+  lotId: number;
+  lotNumber: string | null;
+  materialName: string | null;
+  quantity: string | null;
+  uom: string | null;
+  quotedAmount: string | null;
+};
+
 export type BidderStageDetailDto = {
   stageKey: AuctionRaStageKey;
   stageStatus: "draft" | "published" | "closed";
@@ -40,6 +52,7 @@ export type BidderStageDetailDto = {
   rejectionReason: string | null;
   questions: AuctionRaStageQuestionDto[];
   answers: Record<string, string | string[] | null>;
+  lots: RfqLotDto[];
 };
 
 export type SubmitAnswerValue = string | string[] | undefined;
@@ -309,6 +322,52 @@ export const bidderRaStageSubmissionService = {
       answers[String(a.stageQuestionId)] = a.valueChoices ?? a.valueText ?? null;
     }
 
+    // Fetch auction lots + existing lot quotes (relevant for RFQ stage).
+    const lotRows = await db
+      .select({
+        id: auctionLots.id,
+        lotNumber: auctionLots.lotNumber,
+        quantity: auctionLots.quantity,
+        uomCode: uoms.code,
+        displayOrder: auctionLots.displayOrder,
+      })
+      .from(auctionLots)
+      .leftJoin(uoms, eq(uoms.id, auctionLots.uomId))
+      .where(and(eq(auctionLots.auctionId, auctionId), eq(auctionLots.isActive, true)))
+      .orderBy(auctionLots.displayOrder);
+
+    const lotIds = lotRows.map((l) => l.id);
+
+    const [firstItemRows, quoteRows] = await Promise.all([
+      lotIds.length
+        ? db
+            .select({ lotId: auctionLotItems.lotId, materialName: auctionLotItems.materialName })
+            .from(auctionLotItems)
+            .where(and(inArray(auctionLotItems.lotId, lotIds), eq(auctionLotItems.isActive, true)))
+        : [],
+      lotIds.length
+        ? db
+            .select({ lotId: auctionRaStageLotQuotes.lotId, amount: auctionRaStageLotQuotes.amount })
+            .from(auctionRaStageLotQuotes)
+            .where(eq(auctionRaStageLotQuotes.responseId, row.responseId))
+        : [],
+    ]);
+
+    const materialByLotId = new Map<number, string | null>();
+    for (const item of firstItemRows) {
+      if (!materialByLotId.has(item.lotId)) materialByLotId.set(item.lotId, item.materialName ?? null);
+    }
+    const quoteByLotId = new Map(quoteRows.map((q) => [q.lotId, q.amount ?? null]));
+
+    const lots: RfqLotDto[] = lotRows.map((l) => ({
+      lotId: l.id,
+      lotNumber: l.lotNumber ?? null,
+      materialName: materialByLotId.get(l.id) ?? null,
+      quantity: l.quantity ?? null,
+      uom: l.uomCode ?? null,
+      quotedAmount: quoteByLotId.get(l.id) ?? null,
+    }));
+
     return {
       stageKey,
       stageStatus: row.stageStatus,
@@ -322,6 +381,7 @@ export const bidderRaStageSubmissionService = {
       rejectionReason: row.rejectionReason ?? null,
       questions: questionRows.map(questionRowToDto),
       answers,
+      lots,
     };
   },
 
@@ -332,6 +392,7 @@ export const bidderRaStageSubmissionService = {
     answers: Record<string, SubmitAnswerValue>,
     files: { questionId: string; filename: string; mimetype: string; buffer: Buffer }[],
     userId: number,
+    lotQuotes: Record<number, string> = {},
   ): Promise<void> {
     const row = await requireResponseRow(auctionId, stageKey, bidderId);
 
@@ -445,6 +506,19 @@ export const bidderRaStageSubmissionService = {
         }
       }
 
+      // Upsert lot quotes.
+      for (const [lotIdStr, amountStr] of Object.entries(lotQuotes)) {
+        const lotId = Number(lotIdStr);
+        if (!Number.isInteger(lotId) || !amountStr) continue;
+        await tx
+          .insert(auctionRaStageLotQuotes)
+          .values({ responseId: row.responseId, lotId, amount: amountStr, createdAt: now })
+          .onConflictDoUpdate({
+            target: [auctionRaStageLotQuotes.responseId, auctionRaStageLotQuotes.lotId],
+            set: { amount: amountStr, updatedAt: now },
+          });
+      }
+
       await tx
         .update(auctionRaStageResponses)
         .set({ status: "submitted", submittedAt: now, updatedAt: now })
@@ -459,6 +533,7 @@ export const bidderRaStageSubmissionService = {
     answers: Record<string, SubmitAnswerValue>,
     files: { questionId: string; filename: string; mimetype: string; buffer: Buffer }[],
     userId: number,
+    lotQuotes: Record<number, string> = {},
   ): Promise<void> {
     const row = await requireResponseRow(auctionId, stageKey, bidderId);
 
@@ -542,6 +617,19 @@ export const bidderRaStageSubmissionService = {
             valueText: Array.isArray(value) ? value[0] ?? null : value,
           });
         }
+      }
+
+      // Upsert lot quotes.
+      for (const [lotIdStr, amountStr] of Object.entries(lotQuotes)) {
+        const lotId = Number(lotIdStr);
+        if (!Number.isInteger(lotId) || !amountStr) continue;
+        await tx
+          .insert(auctionRaStageLotQuotes)
+          .values({ responseId: row.responseId, lotId, amount: amountStr, createdAt: now })
+          .onConflictDoUpdate({
+            target: [auctionRaStageLotQuotes.responseId, auctionRaStageLotQuotes.lotId],
+            set: { amount: amountStr, updatedAt: now },
+          });
       }
 
       await tx

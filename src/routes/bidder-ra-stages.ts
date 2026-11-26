@@ -95,8 +95,10 @@ router.post("/auctions/:auctionId/:stageKey/save-draft", uploadAny, async (req, 
   }
 
   let answers: Record<string, string | string[] | undefined> = {};
+  let lotQuotes: Record<number, string> = {};
   try {
     answers = req.body.answers ? JSON.parse(req.body.answers) : {};
+    lotQuotes = req.body.lotQuotes ? JSON.parse(req.body.lotQuotes) : {};
   } catch {
     res.status(400).json({ error: "Invalid answers payload." });
     return;
@@ -115,7 +117,7 @@ router.post("/auctions/:auctionId/:stageKey/save-draft", uploadAny, async (req, 
   const userId = req.user?.id ?? bidderId;
 
   try {
-    await bidderRaStageSubmissionService.saveDraft(auctionId, stageKey, bidderId, answers, files, userId);
+    await bidderRaStageSubmissionService.saveDraft(auctionId, stageKey, bidderId, answers, files, userId, lotQuotes);
     res.json({ ok: true });
   } catch (e) {
     if (handleError(e, res)) return;
@@ -133,8 +135,10 @@ router.post("/auctions/:auctionId/:stageKey/submit", uploadAny, async (req, res,
   }
 
   let answers: Record<string, string | string[] | undefined> = {};
+  let lotQuotes: Record<number, string> = {};
   try {
     answers = req.body.answers ? JSON.parse(req.body.answers) : {};
+    lotQuotes = req.body.lotQuotes ? JSON.parse(req.body.lotQuotes) : {};
   } catch {
     res.status(400).json({ error: "Invalid answers payload." });
     return;
@@ -153,7 +157,7 @@ router.post("/auctions/:auctionId/:stageKey/submit", uploadAny, async (req, res,
   const userId = req.user?.id ?? bidderId;
 
   try {
-    await bidderRaStageSubmissionService.submit(auctionId, stageKey, bidderId, answers, files, userId);
+    await bidderRaStageSubmissionService.submit(auctionId, stageKey, bidderId, answers, files, userId, lotQuotes);
     res.json({ ok: true });
   } catch (e) {
     if (handleError(e, res)) return;

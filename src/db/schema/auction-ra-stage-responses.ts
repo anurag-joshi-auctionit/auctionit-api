@@ -3,6 +3,7 @@ import {
   boolean,
   integer,
   jsonb,
+  numeric,
   pgEnum,
   pgTable,
   text,
@@ -12,6 +13,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { bidders } from "./bidders.js";
 import { auctionRaStageQuestions, auctionRaStages } from "./auction-ra-stages.js";
+import { auctionLots } from "./auction-lots.js";
 import { users } from "./users.js";
 
 export const AUCTION_RA_STAGE_RESPONSE_STATUSES = ["invited", "draft", "submitted"] as const;
@@ -80,5 +82,25 @@ export const auctionRaStageAnswers = pgTable(
       t.responseId,
       t.stageQuestionId,
     ),
+  ],
+);
+
+/** RFQ lot-level quote submitted by the bidder. */
+export const auctionRaStageLotQuotes = pgTable(
+  "auction_ra_stage_lot_quotes",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey().notNull(),
+    responseId: integer("response_id")
+      .notNull()
+      .references(() => auctionRaStageResponses.id, { onDelete: "cascade" }),
+    lotId: integer("lot_id")
+      .notNull()
+      .references(() => auctionLots.id),
+    amount: numeric("amount", { precision: 18, scale: 2 }),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "string" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "string" }),
+  },
+  (t) => [
+    uniqueIndex("auction_ra_stage_lot_quotes_response_lot_uidx").on(t.responseId, t.lotId),
   ],
 );
