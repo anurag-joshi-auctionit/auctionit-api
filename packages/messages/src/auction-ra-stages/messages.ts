@@ -24,4 +24,6 @@ export const AuctionRaStagesErrorMessages = {
   BIDDER_NOT_INVITED: "Bidder is not invited to this stage.",
   RESPONSE_ALREADY_SUBMITTED: "This stage has already been submitted.",
   STAGE_NOT_OPEN_FOR_SUBMISSION: "This stage is not currently open for submissions.",
+  CANNOT_WITHDRAW_SUBMITTED_BIDDER:
+    "Cannot withdraw a bidder who has already submitted a response.",
 } as const;

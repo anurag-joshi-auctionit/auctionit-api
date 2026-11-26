@@ -10,7 +10,7 @@ import type { AuctionRaStageKey } from "../../db/schema/question-templates.js";
 import { users } from "../../db/schema/users.js";
 import type { InviteBiddersInput } from "../../lib/auction-ra-stages/schemas.js";
 import { blockedBidderIdsForClient } from "../../lib/bidders/blocked-for-client.js";
-import { AuctionRaStagesValidationMessages } from "@auctionit/messages/auction-ra-stages";
+import { AuctionRaStagesErrorMessages, AuctionRaStagesValidationMessages } from "@auctionit/messages/auction-ra-stages";
 import { requireReverseAuction } from "./auction-context.js";
 import { earliestEnabledStageKey, ensureStagesExist } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
@@ -40,6 +40,7 @@ export type InvitedBidderDto = {
   invitedBy: string;
   invitedAt: string;
   entryStages: string[];
+  hasSubmitted: boolean;
 };
 
 async function activeInvitedBidderIds(auctionId: number): Promise<number[]> {
@@ -135,6 +136,11 @@ export const auctionRaStagesInvitationsService = {
 
   async listInvited(auctionId: number): Promise<InvitedBidderDto[]> {
     await requireReverseAuction(auctionId);
+    const stageIds = await db
+      .select({ id: auctionRaStages.id })
+      .from(auctionRaStages)
+      .where(eq(auctionRaStages.auctionId, auctionId));
+
     const rows = await db
       .select({
         bidderId: auctionRaStageInvitedBidders.bidderId,
@@ -153,12 +159,33 @@ export const auctionRaStagesInvitationsService = {
         ),
       );
 
+    const submittedBidderIds =
+      stageIds.length > 0
+        ? new Set(
+            (
+              await db
+                .selectDistinct({ bidderId: auctionRaStageResponses.bidderId })
+                .from(auctionRaStageResponses)
+                .where(
+                  and(
+                    inArray(
+                      auctionRaStageResponses.auctionRaStageId,
+                      stageIds.map((s) => s.id),
+                    ),
+                    eq(auctionRaStageResponses.status, "submitted"),
+                  ),
+                )
+            ).map((r) => r.bidderId),
+          )
+        : new Set<number>();
+
     return rows.map((r) => ({
       bidderId: r.bidderId,
       companyName: r.companyName,
       invitedBy: r.invitedByName,
       invitedAt: r.invitedAt,
       entryStages: r.entryStage ? [STAGE_LABEL[r.entryStage]] : [],
+      hasSubmitted: submittedBidderIds.has(r.bidderId),
     }));
   },
 
@@ -255,6 +282,29 @@ export const auctionRaStagesInvitationsService = {
 
   async withdraw(auctionId: number, bidderId: number, userId: number): Promise<void> {
     await requireReverseAuction(auctionId);
+    // Block withdrawal if the bidder has already submitted any stage response.
+    const stageIds = await db
+      .select({ id: auctionRaStages.id })
+      .from(auctionRaStages)
+      .where(eq(auctionRaStages.auctionId, auctionId));
+    if (stageIds.length > 0) {
+      const [submitted] = await db
+        .select({ id: auctionRaStageResponses.id })
+        .from(auctionRaStageResponses)
+        .where(
+          and(
+            eq(auctionRaStageResponses.bidderId, bidderId),
+            inArray(auctionRaStageResponses.auctionRaStageId, stageIds.map((s) => s.id)),
+            eq(auctionRaStageResponses.status, "submitted"),
+          ),
+        )
+        .limit(1);
+      if (submitted) {
+        throw new AuctionRaStageValidationError(
+          AuctionRaStagesErrorMessages.CANNOT_WITHDRAW_SUBMITTED_BIDDER,
+        );
+      }
+    }
     const now = formatUtcNow();
     await db.transaction(async (tx) => {
       await tx
