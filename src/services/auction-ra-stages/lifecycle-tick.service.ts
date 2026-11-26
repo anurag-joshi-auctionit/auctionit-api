@@ -1,5 +1,5 @@
 import { formatUtcNow } from "@auctionit/lib/date";
-import { and, eq, gt, inArray, lte, ne, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNotNull, lte, ne, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { auctionRaStages } from "../../db/schema/auction-ra-stages.js";
 import { auctions } from "../../db/schema/auctions.js";
@@ -85,8 +85,9 @@ export async function runRaStageLifecycleSync(
 
   const publishedAuctionIds = auctionsScope(eq(auctions.status, "published"), filter);
 
-  // For published auctions: publish all draft stages immediately — startsAt/endsAt
-  // are the submission window, not a gate on stage visibility.
+  // For published auctions: publish draft stages that have been configured
+  // (startsAt + endsAt set). Unconfigured stages stay draft so they don't
+  // appear as "Published" before the admin has set them up.
   const published = await db
     .update(auctionRaStages)
     .set({ status: "published", publishedAt: sql`coalesce(${auctionRaStages.publishedAt}, ${now})` })
@@ -94,6 +95,8 @@ export async function runRaStageLifecycleSync(
       and(
         eq(auctionRaStages.enabled, true),
         eq(auctionRaStages.status, "draft"),
+        isNotNull(auctionRaStages.startsAt),
+        isNotNull(auctionRaStages.endsAt),
         inArray(auctionRaStages.auctionId, publishedAuctionIds),
       ),
     )
