@@ -11,7 +11,7 @@ import { users } from "../../db/schema/users.js";
 import type { InviteBiddersInput } from "../../lib/auction-ra-stages/schemas.js";
 import { blockedBidderIdsForClient } from "../../lib/bidders/blocked-for-client.js";
 import { AuctionRaStagesErrorMessages, AuctionRaStagesValidationMessages } from "@auctionit/messages/auction-ra-stages";
-import { requireReverseAuction } from "./auction-context.js";
+import { requireReverseAuction, requireEditableReverseAuction } from "./auction-context.js";
 import { earliestEnabledStageKey, ensureStagesExist } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
 import { enqueueEmails } from "../email-dispatch.service.js";
@@ -190,7 +190,7 @@ export const auctionRaStagesInvitationsService = {
   },
 
   async invite(auctionId: number, input: InviteBiddersInput, userId: number): Promise<void> {
-    await requireReverseAuction(auctionId);
+    await requireEditableReverseAuction(auctionId);
     const stageRows = await ensureStagesExist(auctionId);
     const entryStage = input.entryStage ?? earliestEnabledStageKey(stageRows);
     if (!entryStage) {
@@ -286,7 +286,7 @@ export const auctionRaStagesInvitationsService = {
   },
 
   async withdraw(auctionId: number, bidderId: number, userId: number): Promise<void> {
-    await requireReverseAuction(auctionId);
+    await requireEditableReverseAuction(auctionId);
     // Block withdrawal if the bidder has already submitted any stage response.
     const stageIds = await db
       .select({ id: auctionRaStages.id })

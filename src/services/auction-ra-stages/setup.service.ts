@@ -5,7 +5,7 @@ import { db } from "../../db/index.js";
 import { auctionRaStageQuestions, auctionRaStages } from "../../db/schema/auction-ra-stages.js";
 import type { AuctionRaStageKey } from "../../db/schema/question-templates.js";
 import type { SaveStageSetupInput } from "../../lib/auction-ra-stages/schemas.js";
-import { requireReverseAuction } from "./auction-context.js";
+import { requireEditableReverseAuction } from "./auction-context.js";
 import {
   ensureStagesExist,
   isStageLocked,
@@ -23,7 +23,7 @@ export const auctionRaStagesSetupService = {
     input: SaveStageSetupInput,
     userId: number,
   ): Promise<AuctionRaStagesDto> {
-    const ctx = await requireReverseAuction(auctionId);
+    const ctx = await requireEditableReverseAuction(auctionId);
     const rows = await ensureStagesExist(auctionId);
     const stage = rows.find((r) => r.stageKey === stageKey);
     if (!stage) throw new AuctionRaStageValidationError(AuctionRaStagesErrorMessages.STAGE_NOT_FOUND);

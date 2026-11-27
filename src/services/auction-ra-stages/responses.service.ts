@@ -13,7 +13,7 @@ import { bidders } from "../../db/schema/bidders.js";
 import type { AuctionRaStageKey } from "../../db/schema/question-templates.js";
 import { getSignedDownloadUrl } from "../../lib/r2.js";
 import type { SetStageDecisionInput } from "../../lib/auction-ra-stages/schemas.js";
-import { requireReverseAuction } from "./auction-context.js";
+import { requireReverseAuction, requireEditableReverseAuction } from "./auction-context.js";
 import { ensureStagesExist, nextEnabledStageKey } from "./dto.js";
 import { AuctionRaStageNotFoundError } from "./errors.js";
 
@@ -229,7 +229,7 @@ export const auctionRaStagesResponsesService = {
     input: SetStageDecisionInput,
     userId: number,
   ): Promise<void> {
-    await requireReverseAuction(auctionId);
+    await requireEditableReverseAuction(auctionId);
     const { stage, rows } = await getStageOrThrow(auctionId, stageKey);
 
     const [response] = await db

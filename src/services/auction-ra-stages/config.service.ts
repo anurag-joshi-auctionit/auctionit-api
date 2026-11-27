@@ -6,7 +6,7 @@ import { type AuctionRaStageKey } from "../../db/schema/question-templates.js";
 import { auctions } from "../../db/schema/auctions.js";
 import { clients } from "../../db/schema/clients.js";
 import type { SaveStagesConfigInput } from "../../lib/auction-ra-stages/schemas.js";
-import { requireReverseAuction } from "./auction-context.js";
+import { requireReverseAuction, requireEditableReverseAuction } from "./auction-context.js";
 import { ensureStagesExist, isStageLocked, loadStagesDto, type AuctionRaStagesDto } from "./dto.js";
 
 export type ActiveRaAuctionDto = {
@@ -64,7 +64,7 @@ export const auctionRaStagesConfigService = {
     input: SaveStagesConfigInput,
     userId: number,
   ): Promise<AuctionRaStagesDto> {
-    await requireReverseAuction(auctionId);
+    await requireEditableReverseAuction(auctionId);
     const rows = await ensureStagesExist(auctionId);
     const now = formatUtcNow();
 

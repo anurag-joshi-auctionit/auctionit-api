@@ -19,6 +19,7 @@ export const AuctionRaStagesValidationMessages = {
 export const AuctionRaStagesErrorMessages = {
   STAGE_NOT_FOUND: "RA Stage not found.",
   AUCTION_NOT_REVERSE_TYPE: "RA Stages are only available for reverse auctions.",
+  AUCTION_NOT_EDITABLE: "RA stages can only be edited while the auction is published.",
   STAGE_LOCKED: "This stage can no longer be edited once it has started.",
   INVITE_NOT_FOUND: "Bidder invitation not found.",
   BIDDER_NOT_INVITED: "Bidder is not invited to this stage.",

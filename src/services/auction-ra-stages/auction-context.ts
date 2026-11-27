@@ -14,6 +14,7 @@ export type AuctionRaStageAuctionContext = {
    * instant the auction itself actually begins. Every enabled RA stage must
    * finish before this, regardless of auctionType. */
   auctionStartsAt: string;
+  auctionStatus: string;
 };
 
 /** RA Stages only apply to reverse auctions — validated on every write path. */
@@ -26,6 +27,7 @@ export async function requireReverseAuction(
       clientId: auctions.clientId,
       auctionType: auctions.auctionType,
       auctionDate: auctions.auctionDate,
+      status: auctions.status,
       auctionStartsAt: sql<string>`${earliestLotStartSql()}`,
     })
     .from(auctions)
@@ -46,5 +48,21 @@ export async function requireReverseAuction(
     clientId: row.clientId,
     auctionDate: row.auctionDate,
     auctionStartsAt: row.auctionStartsAt,
+    auctionStatus: row.status,
   };
+}
+
+/** Wraps `requireReverseAuction` and additionally enforces that the auction is
+ * in `published` status. Used on all write paths — stage setup, config toggle,
+ * invite, withdraw, and shortlist/reject decisions. */
+export async function requireEditableReverseAuction(
+  auctionId: number,
+): Promise<AuctionRaStageAuctionContext> {
+  const ctx = await requireReverseAuction(auctionId);
+  if (ctx.auctionStatus !== "published") {
+    throw new AuctionRaStageValidationError(
+      AuctionRaStagesErrorMessages.AUCTION_NOT_EDITABLE,
+    );
+  }
+  return ctx;
 }
