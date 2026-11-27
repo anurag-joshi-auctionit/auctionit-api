@@ -332,7 +332,7 @@ export const bidderRaStageSubmissionService = {
         lotNumber: auctionLots.lotNumber,
         quantity: auctionLots.quantity,
         uomCode: uoms.code,
-        bidLimit: auctionLots.bidLimit,
+        startBidPrice: auctionLots.startBidPrice,
         displayOrder: auctionLots.displayOrder,
       })
       .from(auctionLots)
@@ -369,7 +369,7 @@ export const bidderRaStageSubmissionService = {
       materialName: materialByLotId.get(l.id) ?? null,
       quantity: l.quantity ?? null,
       uom: l.uomCode ?? null,
-      maxPrice: l.bidLimit ?? null,
+      maxPrice: l.startBidPrice ?? null,
       quotedAmount: quoteByLotId.get(l.id) ?? null,
     }));
 
