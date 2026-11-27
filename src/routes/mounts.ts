@@ -59,6 +59,11 @@ export const routeMounts: RouteMount[] = [
   { prefix: "/auth", router: authRouter, tag: "Auth" },
   { prefix: "/locations", router: locationsRouter, tag: "Locations" },
   { prefix: "/clients", router: clientsRouter, tag: "Clients" },
+  {
+    prefix: "/auctions/me",
+    router: bidderRaStagesRouter,
+    tag: "Bidder portal – RA Stages",
+  },
   { prefix: "/auctions/me", router: bidderAuctionsRouter, tag: "Bidder portal – Auctions" },
   { prefix: "/client/auctions", router: clientAuctionsRouter, tag: "Client portal – Auctions" },
   { prefix: "/client/reports", router: clientReportsRouter, tag: "Client portal – Reports" },
@@ -74,11 +79,6 @@ export const routeMounts: RouteMount[] = [
     prefix: "/question-templates",
     router: questionTemplatesRouter,
     tag: "Question templates",
-  },
-  {
-    prefix: "/auctions/me",
-    router: bidderRaStagesRouter,
-    tag: "Bidder portal – RA Stages",
   },
   { prefix: "/files", router: filesRouter, tag: "Files" },
   { prefix: "/sms", router: smsRouter, tag: "SMS" },
