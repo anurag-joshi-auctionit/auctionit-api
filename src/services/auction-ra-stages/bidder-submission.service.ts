@@ -14,8 +14,7 @@ import { auctions } from "../../db/schema/auctions.js";
 import { clients } from "../../db/schema/clients.js";
 import { auctionLots, auctionLotItems } from "../../db/schema/auction-lots.js";
 import { uoms } from "../../db/schema/uoms.js";
-import { putObject } from "../../lib/r2.js";
-import { buildRaStageFileKey } from "../../lib/ra-stage-r2-keys.js";
+import { fileUploadService, FileValidationError } from "../file-upload.service.js";
 import { questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
 
@@ -60,28 +59,6 @@ export type BidderStageDetailDto = {
 export type SubmitAnswerValue = string | string[] | undefined;
 
 const DEFAULT_MAX_FILE_SIZE_MB = 10;
-
-function assertRaStageFile(
-  file: { buffer: Buffer; filename: string },
-  question: { fileUploadAllowedTypes: string[]; fileUploadMaxFileSizeMb: number | null },
-): void {
-  const maxBytes =
-    (question.fileUploadMaxFileSizeMb ?? DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024;
-  if (file.buffer.length > maxBytes) {
-    throw new AuctionRaStageValidationError(
-      BidderRaStagesValidationMessages.FILE_TOO_LARGE,
-    );
-  }
-  if (question.fileUploadAllowedTypes.length > 0) {
-    const idx = file.filename.lastIndexOf(".");
-    const ext = idx >= 0 && idx < file.filename.length - 1 ? file.filename.slice(idx + 1).toLowerCase() : "";
-    if (!question.fileUploadAllowedTypes.includes(ext)) {
-      throw new AuctionRaStageValidationError(
-        BidderRaStagesValidationMessages.FILE_TYPE_NOT_ALLOWED,
-      );
-    }
-  }
-}
 
 async function requireResponseRow(
   auctionId: number,
@@ -449,14 +426,6 @@ export const bidderRaStageSubmissionService = {
       filesByQuestionId.set(f.questionId, arr);
     }
 
-    // Per-file validation (type + size) against question config.
-    for (const q of questionRows) {
-      if (q.answerType !== "file_upload") continue;
-      for (const f of filesByQuestionId.get(String(q.id)) ?? []) {
-        assertRaStageFile(f, q);
-      }
-    }
-
     for (const q of questionRows) {
       if (!q.required) continue;
       const qid = String(q.id);
@@ -484,16 +453,29 @@ export const bidderRaStageSubmissionService = {
       const qid = String(q.id);
       const uploads = filesByQuestionId.get(qid) ?? [];
       if (uploads.length === 0) continue;
-      uploadedByQuestionId.set(
-        qid,
-        await Promise.all(
-          uploads.map(async (f) => {
-            const s3Key = buildRaStageFileKey({ auctionId, stageKey, bidderId, filename: f.filename });
-            await putObject({ key: s3Key, body: f.buffer, contentType: f.mimetype });
-            return { s3Key, fileName: s3Key.split("/").pop()! };
-          }),
-        ),
-      );
+      try {
+        uploadedByQuestionId.set(
+          qid,
+          await fileUploadService.uploadMany(
+            uploads.map((f) => ({ buffer: f.buffer, originalFilename: f.filename, mimeType: f.mimetype })),
+            {
+              folder: `ra-stages/${auctionId}/${stageKey}/${bidderId}`,
+              minSizeBytes: 1,
+              allowedExtensions: q.fileUploadAllowedTypes.length ? q.fileUploadAllowedTypes : undefined,
+              maxSizeBytes: (q.fileUploadMaxFileSizeMb ?? DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024,
+            },
+          ),
+        );
+      } catch (err) {
+        if (err instanceof FileValidationError) {
+          throw new AuctionRaStageValidationError(
+            err.message.includes("exceeds")
+              ? BidderRaStagesValidationMessages.FILE_TOO_LARGE
+              : BidderRaStagesValidationMessages.FILE_TYPE_NOT_ALLOWED,
+          );
+        }
+        throw err;
+      }
     }
 
     const now = formatUtcNow();
@@ -592,30 +574,35 @@ export const bidderRaStageSubmissionService = {
       filesByQuestionId.set(f.questionId, arr);
     }
 
-    // Per-file validation (type + size) against question config.
-    for (const q of questionRows) {
-      if (q.answerType !== "file_upload") continue;
-      for (const f of filesByQuestionId.get(String(q.id)) ?? []) {
-        assertRaStageFile(f, q);
-      }
-    }
-
     const uploadedByQuestionId = new Map<string, { s3Key: string; fileName: string }[]>();
     for (const q of questionRows) {
       if (q.answerType !== "file_upload") continue;
       const qid = String(q.id);
       const uploads = filesByQuestionId.get(qid) ?? [];
       if (uploads.length === 0) continue;
-      uploadedByQuestionId.set(
-        qid,
-        await Promise.all(
-          uploads.map(async (f) => {
-            const s3Key = buildRaStageFileKey({ auctionId, stageKey, bidderId, filename: f.filename });
-            await putObject({ key: s3Key, body: f.buffer, contentType: f.mimetype });
-            return { s3Key, fileName: s3Key.split("/").pop()! };
-          }),
-        ),
-      );
+      try {
+        uploadedByQuestionId.set(
+          qid,
+          await fileUploadService.uploadMany(
+            uploads.map((f) => ({ buffer: f.buffer, originalFilename: f.filename, mimeType: f.mimetype })),
+            {
+              folder: `ra-stages/${auctionId}/${stageKey}/${bidderId}`,
+              minSizeBytes: 1,
+              allowedExtensions: q.fileUploadAllowedTypes.length ? q.fileUploadAllowedTypes : undefined,
+              maxSizeBytes: (q.fileUploadMaxFileSizeMb ?? DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024,
+            },
+          ),
+        );
+      } catch (err) {
+        if (err instanceof FileValidationError) {
+          throw new AuctionRaStageValidationError(
+            err.message.includes("exceeds")
+              ? BidderRaStagesValidationMessages.FILE_TOO_LARGE
+              : BidderRaStagesValidationMessages.FILE_TYPE_NOT_ALLOWED,
+          );
+        }
+        throw err;
+      }
     }
 
     const now = formatUtcNow();

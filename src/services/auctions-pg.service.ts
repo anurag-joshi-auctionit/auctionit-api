@@ -67,13 +67,13 @@ import {
   AuctionsValidationMessages,
 } from "@auctionit/messages/auctions";
 import { AuctionValidationError } from "./auctions-errors.js";
-import { uploadAuctionDocumentBytesToR2 } from "../lib/auction-document-upload.js";
 import {
   assertAuctionDocumentFile,
+  auctionDocumentR2Folder,
   extensionForAuctionDocumentKind,
-  resolveAuctionDocumentStorage,
   sniffAuctionDocumentKind,
 } from "../lib/auction-r2-keys.js";
+import { fileUploadService } from "./file-upload.service.js";
 import {
   assertSaveable,
   checkEmdTotals,
@@ -3215,22 +3215,19 @@ export async function pgUploadAuctionDocument(opts: {
     throw new Error(AuctionsValidationMessages.DOCUMENT_TYPE_NOT_FOUND_OR_INACTIVE);
   }
 
-  const kind = assertAuctionDocumentFile(opts.originalFileName, opts.buffer);
-  const storageName = `document${extensionForAuctionDocumentKind(kind)}`;
-
-  const resolved = resolveAuctionDocumentStorage({
-    documentTypeId: docType.id,
-    fileNamePrefix: docType.fileNamePrefix,
-    auctionId: opts.auctionId,
-    clientId: opts.clientId,
-    originalFileName: storageName,
-  });
-
-  await uploadAuctionDocumentBytesToR2({
-    s3Key: resolved.s3Key,
-    buffer: opts.buffer,
-    filename: resolved.filename,
-  });
+  const resolved = await fileUploadService.upload(
+    { buffer: opts.buffer, originalFilename: opts.originalFileName },
+    {
+      folder: auctionDocumentR2Folder(docType.id),
+      buildFileName: (_orig, finalExt) => {
+        const prefix = docType.fileNamePrefix.endsWith("_")
+          ? docType.fileNamePrefix
+          : `${docType.fileNamePrefix}_`;
+        return `${prefix}${opts.auctionId}_${opts.clientId}.${finalExt}`;
+      },
+      validate: (buf, fname) => { assertAuctionDocumentFile(fname, buf); },
+    },
+  );
 
   const existing = await db
     .select({
@@ -3255,7 +3252,7 @@ export async function pgUploadAuctionDocument(opts: {
     await db
       .update(auctionDocuments)
       .set({
-        fileName: resolved.filename,
+        fileName: resolved.fileName,
         s3Key: resolved.s3Key,
         isActive: true,
         updatedAt: now,
@@ -3280,7 +3277,7 @@ export async function pgUploadAuctionDocument(opts: {
       id: documentId,
       auctionId: opts.auctionId,
       documentTypeId: opts.documentTypeId,
-      fileName: resolved.filename,
+      fileName: resolved.fileName,
       s3Key: resolved.s3Key,
       isActive: true,
       createdAt: now,

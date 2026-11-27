@@ -5,10 +5,8 @@ import {
 import {
   bidderR2ObjectKey,
   bidderR2ObjectKeyForDocument,
-  contentTypeForBidderFileName,
   sanitizeBidderR2FileName,
 } from "./bidder-r2-keys.js";
-import { putObject } from "./r2.js";
 
 export type BidderDocumentUploadResult = {
   storageFileName: string;
@@ -60,26 +58,3 @@ export function resolveNewBidderDocumentStorage(opts: {
   return resolveBidderDocumentStorageFileName(storageFileName);
 }
 
-export async function uploadBidderDocumentBytesToR2(opts: {
-  buffer: Buffer;
-  resolved: BidderDocumentUploadResult;
-}): Promise<BidderDocumentUploadResult> {
-  await putObject({
-    key: opts.resolved.s3Key,
-    body: opts.buffer,
-    contentType: contentTypeForBidderFileName(opts.resolved.storageFileName),
-  });
-
-  return opts.resolved;
-}
-
-export async function uploadNewBidderDocumentBytesToR2(opts: {
-  buffer: Buffer;
-  prefix: string;
-  bidderId: number;
-  originalFileName: string;
-  at?: Date;
-}): Promise<BidderDocumentUploadResult> {
-  const resolved = resolveNewBidderDocumentStorage(opts);
-  return uploadBidderDocumentBytesToR2({ buffer: opts.buffer, resolved });
-}

@@ -10,11 +10,10 @@ import {
   buildNewBidderDocumentFileName,
   legacyBidderDocumentTypePrefix,
 } from "../lib/bidder-document-naming.js";
-import { uploadNewBidderDocumentBytesToR2 } from "../lib/bidder-document-upload.js";
 import {
   BIDDER_DOCUMENT_ALLOWED_EXTENSIONS,
-  isAllowedBidderDocumentExtension,
 } from "../lib/bidder-r2-keys.js";
+import { fileUploadService, FileValidationError } from "./file-upload.service.js";
 import { getSignedDownloadUrl } from "../lib/r2.js";
 import { biddersService } from "./bidders.service.js";
 import { clampPagination } from "./list-query.js";
@@ -349,33 +348,6 @@ async function nextDocumentLogId(): Promise<number> {
   return (row?.value ?? 0) + 1;
 }
 
-export async function uploadBidderFileToR2(opts: {
-  buffer: Buffer;
-  userId: number;
-  prefix: string;
-  bidderId: number;
-  originalFileName: string;
-  at?: Date;
-}): Promise<{
-  filename: string;
-  s3Key: string;
-  storageFileName: string;
-}> {
-  const uploaded = await uploadNewBidderDocumentBytesToR2({
-    buffer: opts.buffer,
-    prefix: opts.prefix,
-    bidderId: opts.bidderId,
-    originalFileName: opts.originalFileName,
-    at: opts.at,
-  });
-
-  return {
-    filename: uploaded.filename,
-    s3Key: uploaded.s3Key,
-    storageFileName: uploaded.storageFileName,
-  };
-}
-
 export async function insertBidderDocumentLog(opts: {
   bidderId: number;
   documentTypeId: number;
@@ -462,37 +434,43 @@ export async function uploadBidderDocument(opts: {
     throw new BidderDocumentTypeNotFoundError();
   }
 
-  if (
-    !opts.originalFileName.trim() ||
-    !isAllowedBidderDocumentExtension(opts.originalFileName)
-  ) {
-    throw new BidderDocumentFileInvalidError("INVALID_EXTENSION");
-  }
-
-  if (
-    opts.buffer.length === 0 ||
-    opts.buffer.length > MAX_BIDDER_DOCUMENT_BYTES
-  ) {
-    throw new BidderDocumentFileInvalidError("INVALID_SIZE");
-  }
-
   const docType = await requireActiveDocumentType(opts.documentTypeId);
   const at = new Date();
 
-  const uploaded = await uploadBidderFileToR2({
-    buffer: opts.buffer,
-    userId: opts.userId,
-    prefix: docType.fileNamePrefix,
-    bidderId: opts.bidderId,
-    originalFileName: opts.originalFileName,
-    at,
-  });
+  let uploadResult: Awaited<ReturnType<typeof fileUploadService.upload>>;
+  try {
+    uploadResult = await fileUploadService.upload(
+      { buffer: opts.buffer, originalFilename: opts.originalFileName },
+      {
+        folder: "bidders",
+        buildFileName: (orig) =>
+          buildNewBidderDocumentFileName({
+            prefix: docType.fileNamePrefix,
+            bidderId: opts.bidderId,
+            originalFileName: orig,
+            at,
+          }),
+        minSizeBytes: 1,
+        maxSizeBytes: MAX_BIDDER_DOCUMENT_BYTES,
+        allowedExtensions: [...BIDDER_DOCUMENT_ALLOWED_EXTENSIONS],
+      },
+    );
+  } catch (err) {
+    if (err instanceof FileValidationError) {
+      throw new BidderDocumentFileInvalidError(
+        err.message.includes("exceeds") || err.message.includes("empty")
+          ? "INVALID_SIZE"
+          : "INVALID_EXTENSION",
+      );
+    }
+    throw err;
+  }
 
   await insertBidderDocumentLog({
     bidderId: opts.bidderId,
     documentTypeId: opts.documentTypeId,
-    s3Key: uploaded.s3Key,
-    storageFileName: uploaded.storageFileName,
+    s3Key: uploadResult.s3Key,
+    storageFileName: uploadResult.fileName,
     userId: opts.userId,
     createdAt: formatUtcNow(at),
   });

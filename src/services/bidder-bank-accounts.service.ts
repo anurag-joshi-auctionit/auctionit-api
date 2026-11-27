@@ -4,13 +4,16 @@ import { bidderBankAccounts } from "../db/schema/bidder-bank-accounts.js";
 import { users } from "../db/schema/users.js";
 import { decryptField, encryptField } from "../lib/field-encryption.js";
 import {
-  legacyBidderDocumentTypePrefix,
   BIDDER_DOCUMENT_TYPE_CANCELLED_CHEQUE,
+  buildNewBidderDocumentFileName,
+  legacyBidderDocumentTypePrefix,
 } from "../lib/bidder-document-naming.js";
+import { BIDDER_DOCUMENT_ALLOWED_EXTENSIONS } from "../lib/bidder-r2-keys.js";
+import { fileUploadService } from "./file-upload.service.js";
 import {
   getCancelledChequeSignedUrl,
-  uploadBidderFileToR2,
   insertCancelledChequeDocumentLog,
+  MAX_BIDDER_DOCUMENT_BYTES,
 } from "./bidder-documents.service.js";
 import { BidderNotFoundError, biddersService } from "./bidders.service.js";
 import { formatUtcNow } from "@auctionit/lib/date";
@@ -118,26 +121,32 @@ export class BidderBankAccountsService {
     if (input.cheque) {
       const originalFilename = input.cheque.originalFilename ?? "cheque.jpg";
       const at = new Date();
-      const uploaded = await uploadBidderFileToR2({
-        userId,
-        buffer: input.cheque.buffer,
-        prefix: legacyBidderDocumentTypePrefix(
-          BIDDER_DOCUMENT_TYPE_CANCELLED_CHEQUE,
-        ),
-        bidderId,
-        originalFileName: originalFilename,
-        at,
-      });
+      const uploaded = await fileUploadService.upload(
+        { buffer: input.cheque.buffer, originalFilename },
+        {
+          folder: "bidders",
+          buildFileName: (orig) =>
+            buildNewBidderDocumentFileName({
+              prefix: legacyBidderDocumentTypePrefix(BIDDER_DOCUMENT_TYPE_CANCELLED_CHEQUE),
+              bidderId,
+              originalFileName: orig,
+              at,
+            }),
+          minSizeBytes: 1,
+          maxSizeBytes: MAX_BIDDER_DOCUMENT_BYTES,
+          allowedExtensions: [...BIDDER_DOCUMENT_ALLOWED_EXTENSIONS],
+        },
+      );
 
       await insertCancelledChequeDocumentLog({
         bidderId,
         s3Key: uploaded.s3Key,
-        storageFileName: uploaded.storageFileName,
+        storageFileName: uploaded.fileName,
         userId,
         createdAt: formatUtcNow(at),
       });
 
-      cancelledChequeFileName = uploaded.storageFileName;
+      cancelledChequeFileName = uploaded.fileName;
     }
 
     const values = {

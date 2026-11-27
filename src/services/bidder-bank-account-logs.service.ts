@@ -23,9 +23,9 @@ const requestedByUser = alias(users, "requested_by_user");
 const reviewedByUser = alias(users, "reviewed_by_user");
 import {
   CANCELLED_CHEQUE_PENDING_PREFIX,
+  buildNewBidderDocumentFileName,
   pendingCancelledChequeToLiveFileName,
 } from "../lib/bidder-document-naming.js";
-import { uploadNewBidderDocumentBytesToR2 } from "../lib/bidder-document-upload.js";
 import {
   buildBankAccountUpdateDecisionHtml,
   buildBankAccountUpdateDecisionSubject,
@@ -34,9 +34,11 @@ import {
 } from "../lib/bidders/bank-account-update-email-template.js";
 import {
   bidderR2ObjectKey,
+  BIDDER_DOCUMENT_ALLOWED_EXTENSIONS,
   contentTypeForBidderFileName,
-  isAllowedBidderDocumentExtension,
 } from "../lib/bidder-r2-keys.js";
+import { fileUploadService, FileValidationError } from "./file-upload.service.js";
+import { MAX_BIDDER_DOCUMENT_BYTES } from "./bidder-documents.service.js";
 import { decryptField, encryptField } from "../lib/field-encryption.js";
 import { getSignedDownloadUrl, renameObject } from "../lib/r2.js";
 import {
@@ -46,8 +48,6 @@ import {
 import { insertCancelledChequeDocumentLog } from "./bidder-documents.service.js";
 import { biddersService } from "./bidders.service.js";
 import { enqueueEmail } from "./email-dispatch.service.js";
-
-const MAX_CHEQUE_BYTES = 10 * 1024 * 1024;
 
 export type BankAccountLogDecision = "pending" | "accepted" | "rejected";
 
@@ -131,16 +131,6 @@ export class ChequeFileTooLargeError extends Error {
   }
 }
 
-function assertChequeFile(opts: {
-  buffer: Buffer;
-  originalFilename: string;
-}): void {
-  if (!opts.buffer.length) throw new ChequeFileInvalidError();
-  if (opts.buffer.length > MAX_CHEQUE_BYTES) throw new ChequeFileTooLargeError();
-  if (!isAllowedBidderDocumentExtension(opts.originalFilename)) {
-    throw new ChequeFileInvalidError();
-  }
-}
 
 async function mapLogRow(row: {
   id: number;
@@ -276,7 +266,6 @@ export class BidderBankAccountLogsService {
     userId: number,
   ): Promise<BankAccountLogView> {
     await biddersService.requireBidder(bidderId);
-    assertChequeFile(input.cheque);
 
     const existingPending = await this.getPendingForBidder(bidderId);
     if (existingPending) {
@@ -284,12 +273,30 @@ export class BidderBankAccountLogsService {
     }
 
     const now = formatUtcNow();
-    const cheque = await uploadNewBidderDocumentBytesToR2({
-      buffer: input.cheque.buffer,
-      prefix: CANCELLED_CHEQUE_PENDING_PREFIX,
-      bidderId,
-      originalFileName: input.cheque.originalFilename,
-    });
+    let cheque: Awaited<ReturnType<typeof fileUploadService.upload>>;
+    try {
+      cheque = await fileUploadService.upload(
+        { buffer: input.cheque.buffer, originalFilename: input.cheque.originalFilename },
+        {
+          folder: "bidders",
+          buildFileName: (orig) =>
+            buildNewBidderDocumentFileName({
+              prefix: CANCELLED_CHEQUE_PENDING_PREFIX,
+              bidderId,
+              originalFileName: orig,
+            }),
+          minSizeBytes: 1,
+          maxSizeBytes: MAX_BIDDER_DOCUMENT_BYTES,
+          allowedExtensions: [...BIDDER_DOCUMENT_ALLOWED_EXTENSIONS],
+        },
+      );
+    } catch (err) {
+      if (err instanceof FileValidationError) {
+        if (err.message.includes("exceeds")) throw new ChequeFileTooLargeError();
+        throw new ChequeFileInvalidError();
+      }
+      throw err;
+    }
 
     const [inserted] = await db
       .insert(bidderBankAccountLogs)
@@ -298,7 +305,7 @@ export class BidderBankAccountLogsService {
         bankAccount: encryptField(input.bankAccount)!,
         bankName: encryptField(input.bankName)!,
         bankIfsc: encryptField(input.bankIfsc)!,
-        cancelledChequeFileName: cheque.storageFileName,
+        cancelledChequeFileName: cheque.fileName,
         cancelledChequeS3Key: cheque.s3Key,
         isVerified: null,
         requestedAt: now,

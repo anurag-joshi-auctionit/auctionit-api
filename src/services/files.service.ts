@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { and, asc, count, desc, eq, ilike, type SQL } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { files } from "../db/schema/index.js";
-import { getSignedDownloadUrl, putObject } from "../lib/r2.js";
+import { getSignedDownloadUrl } from "../lib/r2.js";
 import { clampPagination } from "./list-query.js";
+import { fileUploadService } from "./file-upload.service.js";
 
 export type FileListItem = {
   id: number;
@@ -62,11 +63,6 @@ export function isAllowedExtension(filename: string): boolean {
   return (ALLOWED_FILE_EXTENSIONS as readonly string[]).includes(ext);
 }
 
-function buildKey(userId: number, filename: string): string {
-  const safe = filename.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(-100);
-  return `users/${userId}/${randomUUID()}-${safe}`;
-}
-
 export class FilesService {
   async upload(input: {
     userId: number;
@@ -74,14 +70,22 @@ export class FilesService {
     contentType?: string;
     body: Buffer;
   }): Promise<FileListItem> {
-    const key = buildKey(input.userId, input.filename);
-    await putObject({ key, body: input.body, contentType: input.contentType });
+    const { s3Key } = await fileUploadService.upload(
+      { buffer: input.body, originalFilename: input.filename, mimeType: input.contentType },
+      {
+        folder: `users/${input.userId}`,
+        buildFileName: (orig) => {
+          const safe = orig.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(-100);
+          return `${randomUUID()}-${safe}`;
+        },
+      },
+    );
 
     const [row] = await db
       .insert(files)
       .values({
         filename: input.filename,
-        s3Key: key,
+        s3Key,
         uploadedBy: input.userId,
       })
       .returning();

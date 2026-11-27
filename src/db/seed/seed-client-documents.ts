@@ -1,8 +1,11 @@
 import { appendFile, writeFile } from "node:fs/promises";
 import pg from "pg";
 import { env } from "../../env.js";
-import { legacyClientDocumentTypePrefix } from "../../lib/client-document-naming.js";
-import { uploadNewClientDocumentBytesToR2 } from "../../lib/client-document-upload.js";
+import {
+  buildNewClientDocumentFileName,
+  legacyClientDocumentTypePrefix,
+} from "../../lib/client-document-naming.js";
+import { fileUploadService } from "../../services/file-upload.service.js";
 import {
   extensionForAuctionDocumentKind,
   MAX_AUCTION_DOCUMENT_BYTES,
@@ -300,18 +303,23 @@ async function main() {
     try {
       for (const candidate of limited) {
         const { clientId, row, buffer, originalFileName, createdAt } = candidate;
-        let uploaded: Awaited<
-          ReturnType<typeof uploadNewClientDocumentBytesToR2>
-        > | null = null;
+        let uploaded: { storageFileName: string; s3Key: string } | null = null;
 
         try {
-          uploaded = await uploadNewClientDocumentBytesToR2({
-            buffer,
-            prefix: TNC_PREFIX,
-            clientId,
-            originalFileName,
-            at: createdAt,
-          });
+          const result = await fileUploadService.upload(
+            { buffer, originalFilename: originalFileName },
+            {
+              folder: "clients",
+              buildFileName: (orig) =>
+                buildNewClientDocumentFileName({
+                  prefix: TNC_PREFIX,
+                  clientId,
+                  originalFileName: orig,
+                  at: createdAt,
+                }),
+            },
+          );
+          uploaded = { storageFileName: result.fileName, s3Key: result.s3Key };
         } catch (err) {
           uploadFailed++;
           const note = err instanceof Error ? err.message : "upload failed";

@@ -7,16 +7,14 @@ import {
 import { clientDocumentLogs } from "../db/schema/client-document-logs.js";
 import { users } from "../db/schema/users.js";
 import type { ClientDocumentsListParams } from "../lib/clients/schemas.js";
-import { uploadNewClientDocumentBytesToR2 } from "../lib/client-document-upload.js";
 import {
   assertAuctionDocumentFile,
   AUCTION_DOCUMENT_ALLOWED_EXTENSIONS,
   MAX_AUCTION_DOCUMENT_BYTES,
 } from "../lib/auction-r2-keys.js";
-import {
-  CLIENT_DOCUMENT_ALLOWED_EXTENSIONS,
-  isAllowedClientDocumentExtension,
-} from "../lib/client-r2-keys.js";
+import { CLIENT_DOCUMENT_ALLOWED_EXTENSIONS } from "../lib/client-r2-keys.js";
+import { buildNewClientDocumentFileName } from "../lib/client-document-naming.js";
+import { fileUploadService, FileValidationError } from "./file-upload.service.js";
 import { getSignedDownloadUrl } from "../lib/r2.js";
 import { clientsService } from "./clients.service.js";
 import { clampPagination } from "./list-query.js";
@@ -364,33 +362,6 @@ async function nextDocumentLogId(): Promise<number> {
   return (row?.value ?? 0) + 1;
 }
 
-export async function uploadClientFileToR2(opts: {
-  buffer: Buffer;
-  userId: number;
-  prefix: string;
-  clientId: number;
-  originalFileName: string;
-  at?: Date;
-}): Promise<{
-  filename: string;
-  s3Key: string;
-  storageFileName: string;
-}> {
-  const uploaded = await uploadNewClientDocumentBytesToR2({
-    buffer: opts.buffer,
-    prefix: opts.prefix,
-    clientId: opts.clientId,
-    originalFileName: opts.originalFileName,
-    at: opts.at,
-  });
-
-  return {
-    filename: uploaded.filename,
-    s3Key: uploaded.s3Key,
-    storageFileName: uploaded.storageFileName,
-  };
-}
-
 export async function insertClientDocumentLog(opts: {
   clientId: number;
   documentTypeId: number;
@@ -448,55 +419,56 @@ export async function uploadClientDocument(opts: {
   await clientsService.requireClient(opts.clientId);
 
   const docType = await requireActiveDocumentType(opts.documentTypeId);
-  const constraints = constraintsForDocumentType(opts.documentTypeId);
+  const at = new Date();
 
-  if (opts.documentTypeId === CLIENT_DOCUMENT_TYPE_TNC) {
-    try {
-      assertAuctionDocumentFile(opts.originalFileName, opts.buffer);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "";
-      if (
-        msg.includes("too large") ||
-        msg.toLowerCase().includes("empty") ||
-        opts.buffer.length === 0 ||
-        opts.buffer.length > constraints.maxBytes
-      ) {
+  const isTnc = opts.documentTypeId === CLIENT_DOCUMENT_TYPE_TNC;
+
+  let uploadResult: Awaited<ReturnType<typeof fileUploadService.upload>>;
+  try {
+    uploadResult = await fileUploadService.upload(
+      { buffer: opts.buffer, originalFilename: opts.originalFileName },
+      {
+        folder: "clients",
+        buildFileName: (orig) =>
+          buildNewClientDocumentFileName({
+            prefix: docType.fileNamePrefix,
+            clientId: opts.clientId,
+            originalFileName: orig,
+            at,
+          }),
+        minSizeBytes: 1,
+        maxSizeBytes: isTnc ? MAX_AUCTION_DOCUMENT_BYTES : MAX_CLIENT_DOCUMENT_BYTES,
+        allowedExtensions: isTnc
+          ? [...AUCTION_DOCUMENT_ALLOWED_EXTENSIONS]
+          : [...CLIENT_DOCUMENT_ALLOWED_EXTENSIONS],
+        ...(isTnc && {
+          validate: (buf, fname) => { assertAuctionDocumentFile(fname, buf); },
+        }),
+      },
+    );
+  } catch (err) {
+    if (err instanceof FileValidationError) {
+      throw new ClientDocumentFileInvalidError(
+        err.message.includes("exceeds") || err.message.includes("empty")
+          ? isTnc ? "TNC_INVALID_SIZE" : "INVALID_SIZE"
+          : isTnc ? "TNC_INVALID_EXTENSION" : "INVALID_EXTENSION",
+      );
+    }
+    if (isTnc && err instanceof Error) {
+      const msg = err.message.toLowerCase();
+      if (msg.includes("too large") || msg.includes("empty")) {
         throw new ClientDocumentFileInvalidError("TNC_INVALID_SIZE");
       }
       throw new ClientDocumentFileInvalidError("TNC_INVALID_EXTENSION");
     }
-  } else {
-    if (
-      !opts.originalFileName.trim() ||
-      !isAllowedClientDocumentExtension(opts.originalFileName)
-    ) {
-      throw new ClientDocumentFileInvalidError("INVALID_EXTENSION");
-    }
-
-    if (
-      opts.buffer.length === 0 ||
-      opts.buffer.length > MAX_CLIENT_DOCUMENT_BYTES
-    ) {
-      throw new ClientDocumentFileInvalidError("INVALID_SIZE");
-    }
+    throw err;
   }
-
-  const at = new Date();
-
-  const uploaded = await uploadClientFileToR2({
-    buffer: opts.buffer,
-    userId: opts.userId,
-    prefix: docType.fileNamePrefix,
-    clientId: opts.clientId,
-    originalFileName: opts.originalFileName,
-    at,
-  });
 
   await insertClientDocumentLog({
     clientId: opts.clientId,
     documentTypeId: opts.documentTypeId,
-    s3Key: uploaded.s3Key,
-    storageFileName: uploaded.storageFileName,
+    s3Key: uploadResult.s3Key,
+    storageFileName: uploadResult.fileName,
     userId: opts.userId,
     createdAt: formatUtcNow(at),
   });
