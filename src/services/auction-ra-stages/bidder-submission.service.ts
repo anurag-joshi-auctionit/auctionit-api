@@ -14,7 +14,8 @@ import { auctions } from "../../db/schema/auctions.js";
 import { clients } from "../../db/schema/clients.js";
 import { auctionLots, auctionLotItems } from "../../db/schema/auction-lots.js";
 import { uoms } from "../../db/schema/uoms.js";
-import { filesService, type FileListItem } from "../files.service.js";
+import { putObject } from "../../lib/r2.js";
+import { buildRaStageFileKey } from "../../lib/ra-stage-r2-keys.js";
 import { questionRowToDto, type AuctionRaStageQuestionDto } from "./dto.js";
 import { AuctionRaStageValidationError } from "./errors.js";
 
@@ -57,6 +58,30 @@ export type BidderStageDetailDto = {
 };
 
 export type SubmitAnswerValue = string | string[] | undefined;
+
+const DEFAULT_MAX_FILE_SIZE_MB = 10;
+
+function assertRaStageFile(
+  file: { buffer: Buffer; filename: string },
+  question: { fileUploadAllowedTypes: string[]; fileUploadMaxFileSizeMb: number | null },
+): void {
+  const maxBytes =
+    (question.fileUploadMaxFileSizeMb ?? DEFAULT_MAX_FILE_SIZE_MB) * 1024 * 1024;
+  if (file.buffer.length > maxBytes) {
+    throw new AuctionRaStageValidationError(
+      BidderRaStagesValidationMessages.FILE_TOO_LARGE,
+    );
+  }
+  if (question.fileUploadAllowedTypes.length > 0) {
+    const idx = file.filename.lastIndexOf(".");
+    const ext = idx >= 0 && idx < file.filename.length - 1 ? file.filename.slice(idx + 1).toLowerCase() : "";
+    if (!question.fileUploadAllowedTypes.includes(ext)) {
+      throw new AuctionRaStageValidationError(
+        BidderRaStagesValidationMessages.FILE_TYPE_NOT_ALLOWED,
+      );
+    }
+  }
+}
 
 async function requireResponseRow(
   auctionId: number,
@@ -424,6 +449,14 @@ export const bidderRaStageSubmissionService = {
       filesByQuestionId.set(f.questionId, arr);
     }
 
+    // Per-file validation (type + size) against question config.
+    for (const q of questionRows) {
+      if (q.answerType !== "file_upload") continue;
+      for (const f of filesByQuestionId.get(String(q.id)) ?? []) {
+        assertRaStageFile(f, q);
+      }
+    }
+
     for (const q of questionRows) {
       if (!q.required) continue;
       const qid = String(q.id);
@@ -444,11 +477,8 @@ export const bidderRaStageSubmissionService = {
       }
     }
 
-    // Upload files to R2 + files table before the transaction so the
-    // transaction body is DB-only. Calling filesService.upload() (which uses
-    // the global db) from inside db.transaction() would use a separate pool
-    // connection while the transaction holds one, risking pool starvation.
-    const uploadedByQuestionId = new Map<string, FileListItem[]>();
+    // Upload files to R2 before the transaction (R2 side-effect outside DB tx).
+    const uploadedByQuestionId = new Map<string, { s3Key: string; fileName: string }[]>();
     for (const q of questionRows) {
       if (q.answerType !== "file_upload") continue;
       const qid = String(q.id);
@@ -457,14 +487,11 @@ export const bidderRaStageSubmissionService = {
       uploadedByQuestionId.set(
         qid,
         await Promise.all(
-          uploads.map((f) =>
-            filesService.upload({
-              userId,
-              filename: f.filename,
-              contentType: f.mimetype,
-              body: f.buffer,
-            }),
-          ),
+          uploads.map(async (f) => {
+            const s3Key = buildRaStageFileKey({ auctionId, stageKey, bidderId, filename: f.filename });
+            await putObject({ key: s3Key, body: f.buffer, contentType: f.mimetype });
+            return { s3Key, fileName: s3Key.split("/").pop()! };
+          }),
         ),
       );
     }
@@ -484,8 +511,8 @@ export const bidderRaStageSubmissionService = {
             responseId: row.responseId,
             stageQuestionId: q.id,
             fileRefs: uploaded.map((f) => ({
-              fileId: f.id,
-              fileName: f.filename,
+              s3Key: f.s3Key,
+              fileName: f.fileName,
               sizeLabel: "",
             })),
           });
@@ -565,7 +592,15 @@ export const bidderRaStageSubmissionService = {
       filesByQuestionId.set(f.questionId, arr);
     }
 
-    const uploadedByQuestionId = new Map<string, FileListItem[]>();
+    // Per-file validation (type + size) against question config.
+    for (const q of questionRows) {
+      if (q.answerType !== "file_upload") continue;
+      for (const f of filesByQuestionId.get(String(q.id)) ?? []) {
+        assertRaStageFile(f, q);
+      }
+    }
+
+    const uploadedByQuestionId = new Map<string, { s3Key: string; fileName: string }[]>();
     for (const q of questionRows) {
       if (q.answerType !== "file_upload") continue;
       const qid = String(q.id);
@@ -574,14 +609,11 @@ export const bidderRaStageSubmissionService = {
       uploadedByQuestionId.set(
         qid,
         await Promise.all(
-          uploads.map((f) =>
-            filesService.upload({
-              userId,
-              filename: f.filename,
-              contentType: f.mimetype,
-              body: f.buffer,
-            }),
-          ),
+          uploads.map(async (f) => {
+            const s3Key = buildRaStageFileKey({ auctionId, stageKey, bidderId, filename: f.filename });
+            await putObject({ key: s3Key, body: f.buffer, contentType: f.mimetype });
+            return { s3Key, fileName: s3Key.split("/").pop()! };
+          }),
         ),
       );
     }
@@ -600,7 +632,7 @@ export const bidderRaStageSubmissionService = {
           await tx.insert(auctionRaStageAnswers).values({
             responseId: row.responseId,
             stageQuestionId: q.id,
-            fileRefs: uploaded.map((f) => ({ fileId: f.id, fileName: f.filename, sizeLabel: "" })),
+            fileRefs: uploaded.map((f) => ({ s3Key: f.s3Key, fileName: f.fileName, sizeLabel: "" })),
           });
           continue;
         }

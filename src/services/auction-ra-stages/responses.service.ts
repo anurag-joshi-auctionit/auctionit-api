@@ -11,7 +11,6 @@ import { auctionLots, auctionLotItems } from "../../db/schema/auction-lots.js";
 import { uoms } from "../../db/schema/uoms.js";
 import { bidders } from "../../db/schema/bidders.js";
 import type { AuctionRaStageKey } from "../../db/schema/question-templates.js";
-import { files } from "../../db/schema/files.js";
 import { getSignedDownloadUrl } from "../../lib/r2.js";
 import type { SetStageDecisionInput } from "../../lib/auction-ra-stages/schemas.js";
 import { requireReverseAuction } from "./auction-context.js";
@@ -61,15 +60,14 @@ async function getStageOrThrow(auctionId: number, stageKey: AuctionRaStageKey) {
 function answerValue(
   answerType: string,
   row: typeof auctionRaStageAnswers.$inferSelect,
-  fileUrlById: Map<number, string>,
-  fileNameById: Map<number, { fileName: string; sizeLabel: string }>,
+  urlByS3Key: Map<string, string>,
 ): StageAnswerValueDto {
   if (answerType === "file_upload") {
     if (!row.fileRefs || row.fileRefs.length === 0) return null;
     return row.fileRefs.map((ref) => ({
-      fileName: fileNameById.get(ref.fileId)?.fileName ?? ref.fileName,
-      sizeLabel: fileNameById.get(ref.fileId)?.sizeLabel ?? ref.sizeLabel,
-      url: fileUrlById.get(ref.fileId) ?? "",
+      fileName: ref.fileName,
+      sizeLabel: ref.sizeLabel,
+      url: urlByS3Key.get(ref.s3Key) ?? "",
     }));
   }
   if (answerType === "single_choice" || answerType === "multiple_choice") {
@@ -171,18 +169,9 @@ export const auctionRaStagesResponsesService = {
       .from(auctionRaStageAnswers)
       .where(eq(auctionRaStageAnswers.responseId, response.id));
 
-    const allFileIds = answerRows.flatMap((a) => (a.fileRefs ?? []).map((f) => f.fileId));
-    const fileRows = allFileIds.length
-      ? await db.select().from(files).where(inArray(files.id, allFileIds))
-      : [];
-    const fileUrlById = new Map(
-      await Promise.all(
-        fileRows.map(async (f) => [f.id, await getSignedDownloadUrl(f.s3Key)] as const),
-      ),
-    );
-    const fileNameById = new Map(
-      fileRows.map((f) => [f.id, { fileName: f.filename, sizeLabel: "" }] as const),
-    );
+    const allS3Keys = answerRows.flatMap((a) => (a.fileRefs ?? []).map((f) => f.s3Key));
+    const signedUrls = await Promise.all(allS3Keys.map((key) => getSignedDownloadUrl(key)));
+    const urlByS3Key = new Map(allS3Keys.map((key, i) => [key, signedUrls[i]!]));
 
     const requiredQuestionIds = new Set(
       questionRows.filter((q) => q.required).map((q) => q.id),
@@ -219,7 +208,7 @@ export const auctionRaStagesResponsesService = {
         const question = questionById.get(row.stageQuestionId);
         return {
           questionId: String(row.stageQuestionId),
-          value: answerValue(question?.answerType ?? "short_text", row, fileUrlById, fileNameById),
+          value: answerValue(question?.answerType ?? "short_text", row, urlByS3Key),
         };
       }),
       lots: lotQuoteRows.map((r) => ({

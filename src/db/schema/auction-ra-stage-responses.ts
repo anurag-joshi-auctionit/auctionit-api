@@ -72,9 +72,9 @@ export const auctionRaStageAnswers = pgTable(
     valueText: text("value_text"),
     /** single_choice / multiple_choice answers. */
     valueChoices: text("value_choices").array(),
-    /** file_upload answers — pointers into the generic `files` table. */
+    /** file_upload answers — R2 keys stored directly, no indirection through the files table. */
     fileRefs: jsonb("file_refs").$type<
-      { fileId: number; fileName: string; sizeLabel: string }[] | null
+      { s3Key: string; fileName: string; sizeLabel: string }[] | null
     >(),
   },
   (t) => [
