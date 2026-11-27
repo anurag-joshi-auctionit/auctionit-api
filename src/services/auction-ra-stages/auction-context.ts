@@ -52,10 +52,23 @@ export async function requireReverseAuction(
   };
 }
 
-/** Wraps `requireReverseAuction` and additionally enforces that the auction is
- * in `published` status. Used on all write paths — stage setup, config toggle,
- * invite, withdraw, and shortlist/reject decisions. */
+/** Wraps `requireReverseAuction` and blocks writes on closed/archived auctions.
+ * Used on creation-phase write paths: stage setup, config toggle, invite, withdraw. */
 export async function requireEditableReverseAuction(
+  auctionId: number,
+): Promise<AuctionRaStageAuctionContext> {
+  const ctx = await requireReverseAuction(auctionId);
+  if (ctx.auctionStatus !== "draft" && ctx.auctionStatus !== "published") {
+    throw new AuctionRaStageValidationError(
+      AuctionRaStagesErrorMessages.AUCTION_NOT_EDITABLE,
+    );
+  }
+  return ctx;
+}
+
+/** Wraps `requireReverseAuction` and enforces `published` status.
+ * Used on execution-phase write paths: shortlist/reject decisions. */
+export async function requirePublishedReverseAuction(
   auctionId: number,
 ): Promise<AuctionRaStageAuctionContext> {
   const ctx = await requireReverseAuction(auctionId);
