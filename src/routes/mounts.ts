@@ -76,7 +76,7 @@ export const routeMounts: RouteMount[] = [
     tag: "Question templates",
   },
   {
-    prefix: "/bidder-ra-stages",
+    prefix: "/auctions/me",
     router: bidderRaStagesRouter,
     tag: "Bidder portal – RA Stages",
   },

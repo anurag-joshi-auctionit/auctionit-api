@@ -41,7 +41,7 @@ function handleError(e: unknown, res: Response): boolean {
   return false;
 }
 
-router.get("/my-stages", async (req, res, next) => {
+router.get("/ra-stages", async (req, res, next) => {
   const bidderId = bidderIdOf(req);
   if (bidderId === null) {
     res.status(403).json({ error: "Not a bidder." });
@@ -54,7 +54,7 @@ router.get("/my-stages", async (req, res, next) => {
   }
 });
 
-router.get("/auctions/:auctionId", async (req, res, next) => {
+router.get("/:auctionId/ra-stages", async (req, res, next) => {
   const auctionId = parseAuctionId(req.params.auctionId);
   const bidderId = bidderIdOf(req);
   if (auctionId === null || bidderId === null) {
@@ -69,7 +69,7 @@ router.get("/auctions/:auctionId", async (req, res, next) => {
   }
 });
 
-router.get("/auctions/:auctionId/:stageKey", async (req, res, next) => {
+router.get("/:auctionId/ra-stages/:stageKey", async (req, res, next) => {
   const auctionId = parseAuctionId(req.params.auctionId);
   const stageKey = parseStageKey(req.params.stageKey);
   const bidderId = bidderIdOf(req);
@@ -85,7 +85,7 @@ router.get("/auctions/:auctionId/:stageKey", async (req, res, next) => {
   }
 });
 
-router.post("/auctions/:auctionId/:stageKey/save-draft", uploadAny, async (req, res, next) => {
+router.post("/:auctionId/ra-stages/:stageKey/draft", uploadAny, async (req, res, next) => {
   const auctionId = parseAuctionId(req.params.auctionId);
   const stageKey = parseStageKey(req.params.stageKey);
   const bidderId = bidderIdOf(req);
@@ -125,7 +125,7 @@ router.post("/auctions/:auctionId/:stageKey/save-draft", uploadAny, async (req, 
   }
 });
 
-router.post("/auctions/:auctionId/:stageKey/submit", uploadAny, async (req, res, next) => {
+router.post("/:auctionId/ra-stages/:stageKey/submit", uploadAny, async (req, res, next) => {
   const auctionId = parseAuctionId(req.params.auctionId);
   const stageKey = parseStageKey(req.params.stageKey);
   const bidderId = bidderIdOf(req);
