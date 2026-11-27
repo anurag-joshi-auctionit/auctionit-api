@@ -146,6 +146,8 @@ export const AuctionsValidationMessages = {
   PUBLISH_REQUIRES_LOTS: "Add at least one lot before publishing",
   PUBLISH_REQUIRES_CATALOGUE: "Upload a catalogue before publishing",
   PUBLISH_REQUIRES_TNC: "Upload terms & conditions before publishing",
+  PUBLISH_REQUIRES_RA_STAGES_CONFIGURED:
+    "All enabled RA stages must have a start/end time and at least one question (RFI/RFP) before publishing",
   PUBLISH_EARLIEST_LOT_START_PASSED:
     "Cannot publish: lot start time has already passed",
   SEALED_BID_DATE_REQUIRED: "Sealed-bid date is required",

@@ -18,6 +18,8 @@ import { clearLotExtensionState } from "../lib/auctions/clear-lot-extension-stat
 import {
   auctionLotBidderMaps,
   auctionLots,
+  auctionRaStageQuestions,
+  auctionRaStages,
   auctions,
   auctionSealedBids,
   bidders,
@@ -1416,6 +1418,7 @@ export class AuctionsService {
       .select({
         status: auctions.status,
         auctionDate: auctions.auctionDate,
+        auctionType: auctions.auctionType,
         ...sealedGateColumns,
       })
       .from(auctions)
@@ -1444,6 +1447,47 @@ export class AuctionsService {
       throw new AuctionValidationError(
         AuctionsValidationMessages.PUBLISH_REQUIRES_TNC,
       );
+    }
+
+    if (row.auctionType === "reverse") {
+      const enabledStages = await db
+        .select({
+          id: auctionRaStages.id,
+          stageKey: auctionRaStages.stageKey,
+          startsAt: auctionRaStages.startsAt,
+          endsAt: auctionRaStages.endsAt,
+        })
+        .from(auctionRaStages)
+        .where(
+          and(
+            eq(auctionRaStages.auctionId, auctionId),
+            eq(auctionRaStages.enabled, true),
+          ),
+        );
+      const allWindowsSet = enabledStages.every((s) => s.startsAt && s.endsAt);
+      let allQuestionsSet = true;
+      if (allWindowsSet) {
+        const rfiRfpIds = enabledStages
+          .filter((s) => s.stageKey !== "rfq")
+          .map((s) => s.id);
+        if (rfiRfpIds.length > 0) {
+          const qCounts = await db
+            .select({
+              stageId: auctionRaStageQuestions.auctionRaStageId,
+              cnt: sql<number>`count(*)::int`,
+            })
+            .from(auctionRaStageQuestions)
+            .where(inArray(auctionRaStageQuestions.auctionRaStageId, rfiRfpIds))
+            .groupBy(auctionRaStageQuestions.auctionRaStageId);
+          const countMap = new Map(qCounts.map((r) => [r.stageId, r.cnt]));
+          allQuestionsSet = rfiRfpIds.every((id) => (countMap.get(id) ?? 0) > 0);
+        }
+      }
+      if (enabledStages.length === 0 || !allWindowsSet || !allQuestionsSet) {
+        throw new AuctionValidationError(
+          AuctionsValidationMessages.PUBLISH_REQUIRES_RA_STAGES_CONFIGURED,
+        );
+      }
     }
 
     const lots = await pgLotTimes(auctionId);
