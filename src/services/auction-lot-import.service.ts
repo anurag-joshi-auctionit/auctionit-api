@@ -1,7 +1,7 @@
 import { normalizeFuzzyText } from "@auctionit/lib/fuzzy-match";
 import { collectLotWriteScheduleErrors } from "@auctionit/lib/lot-schedule";
 import { AuctionsValidationMessages } from "@auctionit/messages/auctions";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { auctions } from "../db/schema/index.js";
 import {
@@ -371,6 +371,10 @@ export class AuctionLotImportService {
       .select({
         auctionType: auctions.auctionType,
         publishedAt: auctions.publishedAt,
+        raStageMaxEndsAt: sql<string | null>`(
+          SELECT MAX(ends_at) FROM auction_ra_stages
+          WHERE auction_id = ${auctionId} AND enabled = true
+        )`,
       })
       .from(auctions)
       .where(eq(auctions.id, auctionId))
@@ -497,6 +501,7 @@ export class AuctionLotImportService {
         auctionDate,
         undefined,
         auctionRow?.publishedAt,
+        auctionRow?.raStageMaxEndsAt,
       );
       if (scheduleErrors) {
         Object.assign(fieldErrors, scheduleErrors);

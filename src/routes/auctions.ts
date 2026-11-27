@@ -705,6 +705,7 @@ router.post("/:id/lots", async (req, res, next) => {
     ctx.auctionType,
     ctx.auctionDate,
     ctx.publishedAt,
+    ctx.raStageMaxEndsAt,
   ).safeParse(req.body);
   if (!body.success) {
     res.status(400).json(zodValidationErrorBody(body.error));
@@ -811,6 +812,7 @@ router.patch("/:id/lots/:lotId", async (req, res, next) => {
     ctx.auctionType,
     ctx.auctionDate,
     ctx.publishedAt,
+    ctx.raStageMaxEndsAt,
   ).safeParse(req.body);
   if (!body.success) {
     res.status(400).json(zodValidationErrorBody(body.error));

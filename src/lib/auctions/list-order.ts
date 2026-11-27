@@ -12,7 +12,7 @@ export type AuctionsListSortBy =
 export function earliestLotStartSql() {
   return sql`COALESCE(
     (
-      SELECT date_trunc('day', ${auctions.auctionDate}) + MIN(${auctionLots.startTime})
+      SELECT (date_trunc('day', ${auctions.auctionDate} AT TIME ZONE 'Asia/Kolkata') + MIN(${auctionLots.startTime})) AT TIME ZONE 'Asia/Kolkata'
       FROM ${auctionLots}
       WHERE ${auctionLots.auctionId} = ${auctions.id}
         AND ${auctionLots.isActive} = true

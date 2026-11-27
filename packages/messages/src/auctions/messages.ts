@@ -54,6 +54,8 @@ export const AuctionsValidationMessages = {
     "Lot end time must be greater than the current time",
   LOT_START_TIME_BEFORE_PUBLISHED_AT:
     "Lot start time must be on or after the auction's Published At time",
+  LOT_START_TIME_BEFORE_RA_STAGE_END:
+    "Lot start time must be after all sourcing stages (RFI/RFP/RFQ) have ended",
   LOT_TIMES_REQUIRE_FUTURE_AUCTION_DATE:
     "Auction date is in the past. Update the auction date to today or later before setting lot start/end times.",
   START_BID_PRICE_REQUIRED: "Start bid price is required",

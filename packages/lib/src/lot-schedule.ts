@@ -203,6 +203,7 @@ export function collectLotWriteScheduleErrors(
   auctionDate: string,
   now: Date = new Date(),
   publishedAt?: string | null,
+  raStageMaxEndsAt?: string | null,
 ): Record<string, string[]> | null {
   if (!lotStartTime || !lotEndTime || !auctionDate) return null;
 
@@ -229,6 +230,17 @@ export function collectLotWriteScheduleErrors(
     fieldErrors.lotStartTime = [
       AuctionsValidationMessages.LOT_START_TIME_BEFORE_PUBLISHED_AT,
     ];
+  } else if (raStageMaxEndsAt) {
+    // auctionDate is stored as UTC-midnight encoding of the IST calendar day
+    // (e.g. "2026-11-27T00:00:00Z" means Nov 27 IST).  Build the lot's UTC
+    // start instant by interpreting lotStartTime as IST wall-clock.
+    const dateStr = auctionDate.slice(0, 10);
+    const lotStartUtc = new Date(`${dateStr}T${lotStartTime}+05:30`);
+    if (lotStartUtc.getTime() <= new Date(raStageMaxEndsAt).getTime()) {
+      fieldErrors.lotStartTime = [
+        AuctionsValidationMessages.LOT_START_TIME_BEFORE_RA_STAGE_END,
+      ];
+    }
   }
 
   return Object.keys(fieldErrors).length > 0 ? fieldErrors : null;

@@ -3448,12 +3448,17 @@ export async function pgGetAuctionLotWriteContext(
   auctionType: string | null;
   auctionDate: string | null;
   publishedAt: string | null;
+  raStageMaxEndsAt: string | null;
 } | null> {
   const rows = await db
     .select({
       auctionType: auctions.auctionType,
       auctionDate: auctions.auctionDate,
       publishedAt: auctions.publishedAt,
+      raStageMaxEndsAt: sql<string | null>`(
+        SELECT MAX(ends_at) FROM auction_ra_stages
+        WHERE auction_id = ${auctionId} AND enabled = true
+      )`,
     })
     .from(auctions)
     .where(eq(auctions.id, auctionId))
@@ -3464,6 +3469,7 @@ export async function pgGetAuctionLotWriteContext(
     auctionType: row.auctionType,
     auctionDate: row.auctionDate,
     publishedAt: row.publishedAt,
+    raStageMaxEndsAt: row.raStageMaxEndsAt,
   };
 }
 
