@@ -212,6 +212,27 @@ export async function listMyStageWindows(bidderId: number): Promise<RaStageWindo
     }));
 }
 
+async function assertLotQuotesWithinMaxPrice(
+  auctionId: number,
+  lotQuotes: Record<number, string>,
+): Promise<void> {
+  const lotIds = Object.keys(lotQuotes).map(Number).filter(Number.isInteger);
+  if (lotIds.length === 0) return;
+  const lotRows = await db
+    .select({ id: auctionLots.id, startBidPrice: auctionLots.startBidPrice })
+    .from(auctionLots)
+    .where(and(inArray(auctionLots.id, lotIds), eq(auctionLots.isActive, true)));
+  for (const lot of lotRows) {
+    if (lot.startBidPrice == null) continue;
+    const quote = lotQuotes[lot.id];
+    if (quote != null && Number(quote) > Number(lot.startBidPrice)) {
+      throw new AuctionRaStageValidationError(
+        BidderRaStagesValidationMessages.LOT_QUOTE_EXCEEDS_MAX_PRICE,
+      );
+    }
+  }
+}
+
 export const bidderRaStageSubmissionService = {
   async listMyInvitations(
     auctionId: number,
@@ -446,6 +467,10 @@ export const bidderRaStageSubmissionService = {
       }
     }
 
+    if (stageKey === "rfq" && Object.keys(lotQuotes).length > 0) {
+      await assertLotQuotesWithinMaxPrice(auctionId, lotQuotes);
+    }
+
     // Upload files to R2 before the transaction (R2 side-effect outside DB tx).
     const uploadedByQuestionId = new Map<string, { s3Key: string; fileName: string }[]>();
     for (const q of questionRows) {
@@ -572,6 +597,10 @@ export const bidderRaStageSubmissionService = {
       const arr = filesByQuestionId.get(f.questionId) ?? [];
       arr.push(f);
       filesByQuestionId.set(f.questionId, arr);
+    }
+
+    if (stageKey === "rfq" && Object.keys(lotQuotes).length > 0) {
+      await assertLotQuotesWithinMaxPrice(auctionId, lotQuotes);
     }
 
     const uploadedByQuestionId = new Map<string, { s3Key: string; fileName: string }[]>();

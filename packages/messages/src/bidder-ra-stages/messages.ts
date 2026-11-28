@@ -9,4 +9,5 @@ export const BidderRaStagesValidationMessages = {
   ALL_REQUIRED_QUESTIONS_MUST_BE_ANSWERED: "Please answer all required questions.",
   FILE_TOO_LARGE: "File exceeds the maximum allowed size.",
   FILE_TYPE_NOT_ALLOWED: "This file type is not allowed for this question.",
+  LOT_QUOTE_EXCEEDS_MAX_PRICE: "One or more lot quotes exceed the maximum allowed price.",
 } as const;
