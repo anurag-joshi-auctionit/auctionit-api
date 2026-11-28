@@ -1,9 +1,10 @@
 import { formatUtcNow } from "@auctionit/lib/date";
-import { and, eq, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
+import { and, count, eq, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { auctionRaStageInvitedBidders } from "../../db/schema/auction-ra-stage-invitations.js";
 import { auctionRaStageResponses } from "../../db/schema/auction-ra-stage-responses.js";
-import { auctionRaStages } from "../../db/schema/auction-ra-stages.js";
+import { auctionRaStageQuestions, auctionRaStages } from "../../db/schema/auction-ra-stages.js";
+import { auctionLots } from "../../db/schema/auction-lots.js";
 import { bidders } from "../../db/schema/bidders.js";
 import { materials } from "../../db/schema/materials.js";
 import type { AuctionRaStageKey } from "../../db/schema/question-templates.js";
@@ -204,10 +205,38 @@ export const auctionRaStagesInvitationsService = {
         AuctionRaStagesValidationMessages.SELECT_ENTRY_STAGE_REQUIRED,
       );
     }
-    if (entryStageRow.status === "closed") {
+    if (entryStageRow.status !== "published") {
       throw new AuctionRaStageValidationError(
-        AuctionRaStagesErrorMessages.ENTRY_STAGE_CLOSED,
+        AuctionRaStagesErrorMessages.ENTRY_STAGE_NOT_PUBLISHED,
       );
+    }
+
+    if (!entryStageRow.startsAt || !entryStageRow.endsAt) {
+      throw new AuctionRaStageValidationError(
+        AuctionRaStagesErrorMessages.ENTRY_STAGE_NOT_CONFIGURED,
+      );
+    }
+
+    if (entryStage === "rfq") {
+      const lotCountRows = await db
+        .select({ lotCount: count() })
+        .from(auctionLots)
+        .where(and(eq(auctionLots.auctionId, auctionId), eq(auctionLots.isActive, true)));
+      if ((lotCountRows[0]?.lotCount ?? 0) === 0) {
+        throw new AuctionRaStageValidationError(
+          AuctionRaStagesErrorMessages.ENTRY_STAGE_NOT_CONFIGURED,
+        );
+      }
+    } else {
+      const questionCountRows = await db
+        .select({ questionCount: count() })
+        .from(auctionRaStageQuestions)
+        .where(eq(auctionRaStageQuestions.auctionRaStageId, entryStageRow.id));
+      if ((questionCountRows[0]?.questionCount ?? 0) === 0) {
+        throw new AuctionRaStageValidationError(
+          AuctionRaStagesErrorMessages.ENTRY_STAGE_NOT_CONFIGURED,
+        );
+      }
     }
 
     const now = formatUtcNow();

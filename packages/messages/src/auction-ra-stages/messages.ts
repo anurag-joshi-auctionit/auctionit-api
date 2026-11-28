@@ -29,4 +29,8 @@ export const AuctionRaStagesErrorMessages = {
     "Cannot withdraw a bidder who has already submitted a response.",
   ENTRY_STAGE_CLOSED:
     "Cannot invite bidders — the entry stage is closed. Reopen the stage first by updating its Ends At.",
+  ENTRY_STAGE_NOT_PUBLISHED:
+    "Cannot invite bidders — the entry stage must be published first.",
+  ENTRY_STAGE_NOT_CONFIGURED:
+    "Cannot invite bidders — the entry stage is missing a schedule, questions, or lots. Configure it first.",
 } as const;
